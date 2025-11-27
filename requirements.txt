@@ -1,0 +1,9 @@
+gradio
+requests
+beautifulsoup4
+lxml
+pandas
+tldextract
+textstat
+xlsxwriter
+openpyxl
