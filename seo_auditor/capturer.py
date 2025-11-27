@@ -16,6 +16,17 @@ def _install_browsers():
     except subprocess.CalledProcessError as e:
         print(f"Failed to install browsers: {e}")
 
+def _install_deps():
+    """
+    Installs playwright system dependencies.
+    """
+    print("Installing Playwright dependencies (requires sudo/root)...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "playwright", "install-deps"])
+        print("Dependencies installed successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to install dependencies: {e}")
+
 def capture_screenshots(urls: list[str], progress=None) -> list[str]:
     """
     Captures full-page screenshots for a list of URLs.
@@ -27,8 +38,12 @@ def capture_screenshots(urls: list[str], progress=None) -> list[str]:
         try:
             browser = p.chromium.launch()
         except PlaywrightError as e:
-            if "Executable doesn't exist" in str(e):
+            error_str = str(e)
+            if "Executable doesn't exist" in error_str:
                 _install_browsers()
+                browser = p.chromium.launch()
+            elif "Host system is missing dependencies" in error_str:
+                _install_deps()
                 browser = p.chromium.launch()
             else:
                 raise e

@@ -49,14 +49,38 @@ def run_audit_ui(target_url, progress=gr.Progress()):
 
     return summary, df_final, excel_filename
 
-def run_capture_ui(target_url, progress=gr.Progress()):
-    if not target_url.startswith("http"):
-        target_url = "https://" + target_url
+def run_capture_ui(target_url_input, capture_all, progress=gr.Progress()):
+    # Split by comma and clean up
+    urls = [u.strip() for u in target_url_input.split(",") if u.strip()]
 
-    progress(0, desc="🔍 Scanning Sitemap for Pages...")
-    pages = {target_url}
-    pages = fetch_sitemap_urls(urljoin(target_url, "/sitemap.xml"), pages)
-    page_list = sorted(list(pages))[:MAX_PAGES_TO_SCAN]
+    if not urls:
+        return "Please enter at least one URL.", None
+
+    # Handle first URL for sitemap logic if needed
+    first_url = urls[0]
+    if not first_url.startswith("http"):
+        first_url = "https://" + first_url
+
+    page_list = []
+
+    if capture_all:
+        progress(0, desc="🔍 Scanning Sitemap for Pages...")
+        parsed = urlparse(first_url)
+        domain_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        # Use set to avoid duplicates
+        pages = {first_url}
+        # Try to fetch sitemap from the domain of the first URL
+        pages = fetch_sitemap_urls(urljoin(domain_url, "/sitemap.xml"), pages)
+        page_list = sorted(list(pages))[:MAX_PAGES_TO_SCAN]
+    else:
+        # Just use the provided list, ensuring they have http/https
+        for u in urls:
+            if not u.startswith("http"):
+                u = "https://" + u
+            page_list.append(u)
+        # Remove duplicates if any
+        page_list = sorted(list(set(page_list)))
 
     timestamp = int(time.time())
 
@@ -72,7 +96,7 @@ def run_capture_ui(target_url, progress=gr.Progress()):
         if pdf_path:
              status_msg = f"""
             ### ✅ Capture Complete
-            - **Target:** {target_url}
+            - **Target:** {target_url_input}
             - **Pages Captured:** {len(screenshot_paths)}
             - **PDF Created:** {pdf_filename}
             """
@@ -113,10 +137,11 @@ def create_ui():
 
             # Tab 2: PDF Creation
             with gr.Tab("PDF Capture"):
-                gr.Markdown("Capture full-page screenshots of all pages found in the sitemap and compile them into a PDF.")
+                gr.Markdown("Capture full-page screenshots of pages and compile them into a PDF.")
 
                 with gr.Row():
-                    url_input_capture = gr.Textbox(label="Website URL", placeholder="https://example.com")
+                    url_input_capture = gr.Textbox(label="Website URL(s)", placeholder="https://example.com, https://example.com/page2")
+                    capture_all_checkbox = gr.Checkbox(label="Capture all pages from sitemap (using domain from first URL)")
                     capture_btn = gr.Button("Capture & Create PDF", variant="primary")
 
                 status_output_capture = gr.Markdown("Ready to capture.")
@@ -126,7 +151,7 @@ def create_ui():
 
                 capture_btn.click(
                     run_capture_ui,
-                    inputs=[url_input_capture],
+                    inputs=[url_input_capture, capture_all_checkbox],
                     outputs=[status_output_capture, download_btn_capture]
                 )
 
