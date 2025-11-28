@@ -35,3 +35,24 @@ def get_schema_types(soup):
             except:
                 continue
     return ", ".join(sorted(list(types_found)))
+
+def get_raw_schema(soup):
+    """
+    Extracts all JSON-LD scripts and returns them as a single formatted JSON list.
+    If multiple scripts exist, they are combined into a list.
+    """
+    scripts = soup.find_all('script', type='application/ld+json')
+    extracted_data = []
+
+    for script in scripts:
+        if script.string:
+            try:
+                data = json.loads(script.string)
+                extracted_data.append(data)
+            except:
+                continue
+
+    if not extracted_data:
+        return "[]"
+
+    return json.dumps(extracted_data, indent=2)
