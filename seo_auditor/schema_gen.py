@@ -20,7 +20,7 @@ def generate_improved_schema(url: str, api_key: str):
     genai.configure(api_key=api_key)
 
     # Select model - gemini-1.5-flash is good for vision and speed
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
 
     # 1. Fetch Current Schema
     try:
