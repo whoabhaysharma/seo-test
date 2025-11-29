@@ -554,7 +554,14 @@ def create_ui():
                             
                             with gr.Row():
                                 update_alts_btn = gr.Button("🚀 Update All Alt Texts", variant="stop")
-                                update_log = gr.Code(label="Update Log", language="text", lines=6)
+                                
+                                # FIXED: CHANGED FROM gr.Code(..., language="text") TO gr.Textbox
+                                update_log = gr.Textbox(
+                                    label="Update Log", 
+                                    lines=6, 
+                                    interactive=False, 
+                                    show_copy_button=True
+                                )
                             
                             # Connect handlers
                             fetch_images_btn.click(
