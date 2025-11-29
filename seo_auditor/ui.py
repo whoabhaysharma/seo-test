@@ -17,6 +17,7 @@ try:
     from .schema_gen import generate_improved_schema
     from .wp_handler import push_schema_to_wordpress, update_page_meta
     from .meta_gen import generate_meta_tags
+    from .image_alt_updater import fetch_page_images, update_image_alts
 except ImportError:
     # Fallback for when running directly or if imports are missing
     pass
@@ -222,6 +223,72 @@ def run_sitemap_extract(homepage_url, progress=gr.Progress()):
     df.to_csv(filename, index=False)
     
     return df, f"✅ Found {len(urls)} URLs", filename
+
+def run_image_alt_fetch(page_url, progress=gr.Progress()):
+    """Fetch all images from a page and return them in a format suitable for the UI"""
+    if not page_url:
+        return [], "Please enter a page URL."
+    
+    if not page_url.startswith("http"):
+        page_url = "https://" + page_url
+    
+    progress(0.3, desc="🖼️ Fetching images...")
+    
+    images = fetch_page_images(page_url)
+    
+    if not images:
+        return [], "❌ No images found on this page."
+    
+    # Prepare data for display
+    # Format: [image_url, current_alt, new_alt (editable), attachment_id]
+    image_data = []
+    for img in images:
+        image_data.append([
+            img['url'],
+            img['current_alt'],
+            img['current_alt'],  # Default new_alt to current
+            img['attachment_id'] if img['attachment_id'] else "N/A"
+        ])
+    
+    return image_data, f"✅ Found {len(images)} images"
+
+def run_image_alt_update(page_url, image_df, wp_user, wp_pass, progress=gr.Progress()):
+    """Update alt text for all images"""
+    if not page_url or not wp_user or not wp_pass:
+        return "Error: Page URL and WordPress credentials required."
+    
+    if image_df is None or len(image_df) == 0:
+        return "Error: No images to update."
+    
+    progress(0.2, desc="📝 Preparing updates...")
+    
+    # Parse the dataframe to extract updates
+    updates = []
+    for row in image_df:
+        attachment_id = row[3]  # 4th column
+        new_alt = row[2]  # 3rd column (new alt text)
+        
+        # Skip if no attachment ID
+        if attachment_id == "N/A" or not attachment_id:
+            continue
+        
+        try:
+            attachment_id = int(attachment_id)
+            updates.append({
+                'attachment_id': attachment_id,
+                'new_alt': new_alt
+            })
+        except:
+            continue
+    
+    if not updates:
+        return "⚠️ No valid images to update (missing attachment IDs)."
+    
+    progress(0.5, desc=f"🚀 Updating {len(updates)} images...")
+    
+    success, message = update_image_alts(page_url, wp_user, wp_pass, updates)
+    
+    return f"✅ Update Complete!\n\n{message}"
 
 # ==========================================
 # 🎨 UI REDESIGN (Modern / Dashboard)
@@ -459,5 +526,47 @@ def create_ui():
                                         inputs=[sitemap_url_input],
                                         outputs=[gr.Dataframe(visible=False), sitemap_status, sitemap_download]
                                     )
+                        
+                        # Image Alt Text Updater
+                        gr.Markdown("---")
+                        with gr.Group(elem_classes="card"):
+                            gr.Markdown("### 🖼️ Image Alt Text Bulk Updater")
+                            gr.Markdown("_Fetch all images from a page and update their alt text in bulk._")
+                            
+                            image_page_url = gr.Textbox(
+                                label="Page URL", 
+                                placeholder="https://example.com/page-with-images"
+                            )
+                            
+                            fetch_images_btn = gr.Button("🔍 Fetch Images", variant="primary", elem_classes="primary-btn")
+                            image_status = gr.Markdown("")
+                            
+                            gr.Markdown("**Edit Alt Text Below (Double-click cells in 'New Alt Text' column)**")
+                            
+                            # Dataframe to display images
+                            image_df = gr.Dataframe(
+                                headers=["Image URL", "Current Alt", "New Alt Text", "Attachment ID"],
+                                datatype=["str", "str", "str", "str"],
+                                interactive=True,
+                                wrap=True,
+                                col_count=(4, "fixed")
+                            )
+                            
+                            with gr.Row():
+                                update_alts_btn = gr.Button("🚀 Update All Alt Texts", variant="stop")
+                                update_log = gr.Code(label="Update Log", language="text", lines=6)
+                            
+                            # Connect handlers
+                            fetch_images_btn.click(
+                                run_image_alt_fetch,
+                                inputs=[image_page_url],
+                                outputs=[image_df, image_status]
+                            )
+                            
+                            update_alts_btn.click(
+                                run_image_alt_update,
+                                inputs=[image_page_url, image_df, wp_user_input, wp_pass_input],
+                                outputs=[update_log]
+                            )
 
     return demo
