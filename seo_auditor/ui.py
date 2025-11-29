@@ -11,7 +11,6 @@ from .analyzer import analyze_page
 from .reporter import prepare_dataframe, save_excel
 from .capturer import capture_screenshots, create_pdf
 from .schema_gen import generate_improved_schema
-from .schema_gen import generate_improved_schema
 from .wp_handler import push_schema_to_wordpress, update_page_meta # <--- UPDATED IMPORT
 from .meta_gen import generate_meta_tags # <--- NEW IMPORT
 
@@ -162,7 +161,6 @@ def auto_fix_schema(url, api_key, wp_user, wp_pass, progress=gr.Progress()):
             final_msg = f"⚠️ Schema Improved but Update Failed.\n\nSummary: {summary}\n\nWP Error: {message}"
             
         return final_msg, old_schema, new_schema_str, old_score, new_score
-    else:
     else:
         return f"ℹ️ No improvement found. Old Score: {old_score}, New Score: {new_score}. No update performed.", old_schema, new_schema_str, old_score, new_score
 
