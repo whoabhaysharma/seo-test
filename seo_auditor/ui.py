@@ -1,6 +1,7 @@
 import gradio as gr
 import pandas as pd
 import time
+import json
 from urllib.parse import urlparse, urljoin
 
 from .config import MAX_PAGES_TO_SCAN
@@ -8,6 +9,7 @@ from .crawler import check_robots_txt, fetch_sitemap_urls
 from .analyzer import analyze_page
 from .reporter import prepare_dataframe, save_excel
 from .capturer import capture_screenshots, create_pdf
+from .schema_gen import generate_improved_schema
 
 def run_audit_ui(target_url, progress=gr.Progress()):
     if not target_url.startswith("http"):
@@ -103,6 +105,31 @@ def run_capture_ui(target_url_input, capture_all, progress=gr.Progress()):
 
     return status_msg, pdf_path
 
+def run_schema_update(url, api_key, progress=gr.Progress()):
+    if not url:
+        return "Please enter a URL.", "", ""
+    if not api_key:
+        return "Please enter a Gemini API Key.", "", ""
+
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    progress(0, desc="🚀 Initializing...")
+
+    old_schema, new_schema = generate_improved_schema(url, api_key)
+
+    return "✅ Generation Complete. Review changes below.", old_schema, new_schema
+
+def save_new_schema(new_schema_content):
+    if not new_schema_content:
+        return None
+
+    filename = f"new_schema_{int(time.time())}.json"
+    with open(filename, "w") as f:
+        f.write(new_schema_content)
+
+    return filename
+
 def create_ui():
     with gr.Blocks(title="Advanced SEO Auditor", theme=gr.themes.Soft(primary_hue="blue")) as demo:
         gr.Markdown("# 🚀 Advanced SEO Auditor")
@@ -153,6 +180,42 @@ def create_ui():
                     run_capture_ui,
                     inputs=[url_input_capture, capture_all_checkbox],
                     outputs=[status_output_capture, download_btn_capture]
+                )
+
+            # Tab 3: Schema Updater
+            with gr.Tab("Schema Updater"):
+                gr.Markdown("Capture a page screenshot, analyze existing Schema, and generate an improved JSON-LD schema using Google Gemini.")
+
+                with gr.Row():
+                    url_input_schema = gr.Textbox(label="Page URL", placeholder="https://example.com/product/1")
+                    api_key_input = gr.Textbox(label="Gemini API Key", placeholder="Enter your Google Gemini API Key", type="password")
+
+                generate_schema_btn = gr.Button("Generate Improved Schema", variant="primary")
+
+                schema_status = gr.Markdown("")
+
+                with gr.Row():
+                    with gr.Column():
+                        gr.Markdown("### Current Schema")
+                        old_schema_display = gr.Code(language="json", label="Current JSON-LD")
+                    with gr.Column():
+                        gr.Markdown("### Improved Schema (Gemini)")
+                        new_schema_display = gr.Code(language="json", label="Generated JSON-LD", interactive=True)
+
+                with gr.Row():
+                    save_schema_btn = gr.Button("Confirm & Save New Schema")
+                    download_schema_file = gr.File(label="Download JSON")
+
+                generate_schema_btn.click(
+                    run_schema_update,
+                    inputs=[url_input_schema, api_key_input],
+                    outputs=[schema_status, old_schema_display, new_schema_display]
+                )
+
+                save_schema_btn.click(
+                    save_new_schema,
+                    inputs=[new_schema_display],
+                    outputs=[download_schema_file]
                 )
 
     return demo

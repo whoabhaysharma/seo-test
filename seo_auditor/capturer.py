@@ -8,24 +8,30 @@ from PIL import Image
 def _install_browsers():
     """
     Installs playwright browsers if they are missing.
+    Returns True if successful, False otherwise.
     """
     print("Installing Playwright browsers...")
     try:
         subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
         print("Browsers installed successfully.")
+        return True
     except subprocess.CalledProcessError as e:
         print(f"Failed to install browsers: {e}")
+        return False
 
 def _install_deps():
     """
     Installs playwright system dependencies.
+    Returns True if successful, False otherwise.
     """
     print("Installing Playwright dependencies (requires sudo/root)...")
     try:
         subprocess.check_call([sys.executable, "-m", "playwright", "install-deps"])
         print("Dependencies installed successfully.")
+        return True
     except subprocess.CalledProcessError as e:
         print(f"Failed to install dependencies: {e}")
+        return False
 
 def capture_screenshots(urls: list[str], progress=None) -> list[str]:
     """
@@ -34,19 +40,31 @@ def capture_screenshots(urls: list[str], progress=None) -> list[str]:
     """
     screenshot_paths = []
 
+    # Common args for running in containers/sandbox environments
+    launch_args = ["--no-sandbox", "--disable-setuid-sandbox"]
+
     with sync_playwright() as p:
         try:
-            browser = p.chromium.launch()
+            browser = p.chromium.launch(args=launch_args)
         except PlaywrightError as e:
             error_str = str(e)
+            installed = False
             if "Executable doesn't exist" in error_str:
-                _install_browsers()
-                browser = p.chromium.launch()
+                if _install_browsers():
+                    installed = True
             elif "Host system is missing dependencies" in error_str:
-                _install_deps()
-                browser = p.chromium.launch()
+                if _install_deps():
+                    installed = True
+
+            if installed:
+                try:
+                    browser = p.chromium.launch(args=launch_args)
+                except PlaywrightError as e2:
+                    print(f"Failed to launch browser after installation attempts: {e2}")
+                    return []
             else:
-                raise e
+                print(f"Browser launch failed and auto-installation was not successful or applicable: {e}")
+                return []
 
         context = browser.new_context(viewport={"width": 1280, "height": 1024})
 
