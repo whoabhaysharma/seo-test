@@ -1,0 +1,76 @@
+import requests
+import json
+from urllib.parse import urlparse
+
+def push_schema_to_wordpress(target_url, username, app_password, schema_json_str):
+    """
+    1. Derives slug from URL.
+    2. Searches WP API for the Page/Post ID.
+    3. Updates the 'custom_schema_json' meta field.
+    """
+    
+    # 1. Parse URL to get domain and slug
+    parsed = urlparse(target_url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    
+    # Simple slug extraction (removes trailing slash)
+    path_parts = parsed.path.strip("/").split("/")
+    slug = path_parts[-1] if path_parts else ""
+    
+    if not slug:
+        # If homepage, usually ID is handled differently, but let's assume specific pages for now
+        return False, "Error: Could not determine page slug from URL. Is this the homepage?"
+
+    auth = (username, app_password)
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Gemini-SEO-Updater/1.0"
+    }
+
+    # 2. Find the Post/Page ID
+    # We check both 'pages' and 'posts' endpoints
+    post_id = None
+    post_type = None
+    
+    endpoints = ["pages", "posts"]
+    
+    try:
+        for ep in endpoints:
+            search_api = f"{base_url}/wp-json/wp/v2/{ep}?slug={slug}"
+            print(f"Searching: {search_api}") # Debug
+            resp = requests.get(search_api, timeout=10)
+            
+            if resp.status_code == 200:
+                results = resp.json()
+                if results and len(results) > 0:
+                    post_id = results[0]['id']
+                    post_type = ep
+                    break
+        
+        if not post_id:
+            return False, f"Error: Could not find a Page or Post with slug '{slug}' on {base_url}"
+
+        # 3. Update the Meta Field
+        # Note: Ensure register_meta() in PHP has 'show_in_rest' => true
+        update_url = f"{base_url}/wp-json/wp/v2/{post_type}/{post_id}"
+        
+        payload = {
+            "meta": {
+                "custom_schema_json": schema_json_str
+            }
+        }
+
+        update_resp = requests.post(
+            update_url, 
+            auth=auth, 
+            json=payload, 
+            headers=headers
+        )
+
+        if update_resp.status_code == 200:
+            return True, f"Success! Updated {post_type} ID {post_id}. Status: {update_resp.status_code}"
+        else:
+            return False, f"Failed to update. API Response: {update_resp.text}"
+
+    except Exception as e:
+        return False, f"Connection Error: {str(e)}"
