@@ -18,8 +18,9 @@ def push_schema_to_wordpress(target_url, username, app_password, schema_json_str
     slug = path_parts[-1] if path_parts else ""
     
     if not slug:
-        # If homepage, usually ID is handled differently, but let's assume specific pages for now
-        return False, "Error: Could not determine page slug from URL. Is this the homepage?"
+        # If slug is empty, it might be the homepage.
+        # We will try to find the page by matching the 'link' field in the API response.
+        pass # We'll handle this in the search loop below
 
     auth = (username, app_password)
     headers = {
@@ -36,19 +37,35 @@ def push_schema_to_wordpress(target_url, username, app_password, schema_json_str
     
     try:
         for ep in endpoints:
-            search_api = f"{base_url}/wp-json/wp/v2/{ep}?slug={slug}"
+            if slug:
+                search_api = f"{base_url}/wp-json/wp/v2/{ep}?slug={slug}"
+            else:
+                # For homepage (empty slug), list pages and find matching link
+                search_api = f"{base_url}/wp-json/wp/v2/{ep}"
+
             print(f"Searching: {search_api}") # Debug
             resp = requests.get(search_api, timeout=10)
             
             if resp.status_code == 200:
                 results = resp.json()
                 if results and len(results) > 0:
-                    post_id = results[0]['id']
-                    post_type = ep
-                    break
+                    if slug:
+                        # Exact slug match
+                        post_id = results[0]['id']
+                        post_type = ep
+                        break
+                    else:
+                        # URL match for homepage
+                        for item in results:
+                            # Normalize URLs by stripping trailing slashes
+                            if item['link'].rstrip('/') == target_url.rstrip('/'):
+                                post_id = item['id']
+                                post_type = ep
+                                break
+                    if post_id: break
         
         if not post_id:
-            return False, f"Error: Could not find a Page or Post with slug '{slug}' on {base_url}"
+            return False, f"Error: Could not find a Page or Post matching URL '{target_url}' on {base_url}"
 
         # 3. Update the Meta Field
         # Note: Ensure register_meta() in PHP has 'show_in_rest' => true

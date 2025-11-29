@@ -63,6 +63,42 @@ def confirm_and_update(url, new_schema_content, wp_user, wp_pass):
         log_msg = f"❌ UPDATE FAILED\n{message}\n📁 Backup saved: {filename}"
     
     return log_msg, filename
+    
+# --- NEW FUNCTION 5: AUTO-FIX LOOP ---
+def auto_fix_schema(url, api_key, wp_user, wp_pass, progress=gr.Progress()):
+    if not url or not api_key or not wp_user or not wp_pass:
+        return "Error: All fields (URL, API Key, WP User, WP Pass) are required for Auto-Fix.", "", "", 0, 0
+
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    progress(0.1, desc="🔍 Analyzing & Generating Schema...")
+    
+    # 1. Generate Schema
+    old_schema, new_schema_str, old_score, new_score, summary = generate_improved_schema(url, api_key)
+    
+    # Check if generation failed
+    if not new_schema_str or "Error" in summary:
+        return f"❌ Generation Failed: {summary}", old_schema, "", old_score, new_score
+
+    progress(0.5, desc="📊 Evaluating Improvement...")
+    
+    # 2. Decide whether to update
+    # Criteria: New score must be better than old score, or old score is 0 (missing)
+    if new_score > old_score:
+        progress(0.7, desc="🚀 Pushing to WordPress...")
+        
+        # 3. Push to WP
+        success, message = push_schema_to_wordpress(url, wp_user, wp_pass, new_schema_str)
+        
+        if success:
+            final_msg = f"✅ AUTO-FIX SUCCESSFUL!\n\nSummary: {summary}\n\nWP Update: {message}"
+        else:
+            final_msg = f"⚠️ Schema Improved but Update Failed.\n\nSummary: {summary}\n\nWP Error: {message}"
+            
+        return final_msg, old_schema, new_schema_str, old_score, new_score
+    else:
+        return f"ℹ️ No improvement found. Old Score: {old_score}, New Score: {new_score}. No update performed.", old_schema, new_schema_str, old_score, new_score
 
 # --- UI BUILDER ---
 def create_ui():
@@ -104,6 +140,9 @@ def create_ui():
                     wp_user_input = gr.Textbox(label="WP Username")
                     wp_pass_input = gr.Textbox(label="WP App Password", type="password")
 
+                gr.Markdown("### 3. Auto-Fix (One Click)")
+                auto_fix_btn = gr.Button("⚡ Auto-Fix & Update", variant="primary")
+
                 with gr.Row():
                     save_schema_btn = gr.Button("✅ Confirm & Update Live Site", variant="stop")
                     download_schema_file = gr.File(label="Download Backup")
@@ -121,6 +160,12 @@ def create_ui():
                     confirm_and_update,
                     inputs=[url_input_schema, new_schema_display, wp_user_input, wp_pass_input],
                     outputs=[update_log, download_schema_file]
+                )
+
+                auto_fix_btn.click(
+                    auto_fix_schema,
+                    inputs=[url_input_schema, api_key_input, wp_user_input, wp_pass_input],
+                    outputs=[schema_status, old_schema_display, new_schema_display, old_score_disp, new_score_disp]
                 )
 
     return demo
