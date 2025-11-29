@@ -15,24 +15,34 @@ from .wp_handler import push_schema_to_wordpress, update_page_meta # <--- UPDATE
 from .meta_gen import generate_meta_tags # <--- NEW IMPORT
 
 # --- FUNCTION 1: AUDIT ---
-def run_audit_ui(start_url, max_pages, progress=gr.Progress()):
-    if not start_url:
-        return None, None, "Please enter a URL."
+def run_audit_ui(urls_input, max_pages, progress=gr.Progress()):
+    if not urls_input:
+        return None, None, "Please enter URL(s)."
     
-    if not start_url.startswith("http"):
-        start_url = "https://" + start_url
+    # Parse comma-separated URLs
+    urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
+    
+    # Normalize URLs
+    for i, url in enumerate(urls_list):
+        if not url.startswith("http"):
+            urls_list[i] = "https://" + url
+    
+    # If single URL, try sitemap discovery
+    if len(urls_list) == 1:
+        start_url = urls_list[0]
+        domain_netloc = urlparse(start_url).netloc
         
-    domain_netloc = urlparse(start_url).netloc
-    
-    # 1. Discovery
-    progress(0.1, desc="🔍 Discovering pages...")
-    urls_to_scan = [start_url]
-    
-    # Try sitemap
-    sitemap_url = urljoin(start_url, "sitemap.xml")
-    found_sitemap = fetch_sitemap_urls(sitemap_url)
-    if found_sitemap:
-        urls_to_scan = list(found_sitemap)
+        progress(0.1, desc="🔍 Discovering pages...")
+        sitemap_url = urljoin(start_url, "sitemap.xml")
+        found_sitemap = fetch_sitemap_urls(sitemap_url)
+        if found_sitemap:
+            urls_to_scan = list(found_sitemap)
+        else:
+            urls_to_scan = urls_list
+    else:
+        # Multiple URLs provided, use them directly
+        urls_to_scan = urls_list
+        domain_netloc = urlparse(urls_to_scan[0]).netloc
     
     # Limit
     if max_pages > 0:
@@ -57,35 +67,44 @@ def run_audit_ui(start_url, max_pages, progress=gr.Progress()):
     return df_display, filename, f"✅ Audit Complete. Scanned {len(urls_to_scan)} pages."
 
 # --- FUNCTION 2: CAPTURE ---
-def run_capture_ui(url, progress=gr.Progress()):
-    if not url:
-        return None, None, "Please enter a URL."
+def run_capture_ui(urls_input, progress=gr.Progress()):
+    if not urls_input:
+        return None, None, "Please enter URL(s)."
+    
+    # Parse comma-separated URLs
+    urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
+    
+    # Normalize URLs
+    for i, url in enumerate(urls_list):
+        if not url.startswith("http"):
+            urls_list[i] = "https://" + url
         
-    if not url.startswith("http"):
-        url = "https://" + url
-        
-    progress(0.2, desc="📸 Capturing Screenshot...")
+    progress(0.2, desc=f"📸 Capturing {len(urls_list)} page(s)...")
     
     # Capture
-    screenshot_paths = capture_screenshots([url], progress=progress)
+    screenshot_paths = capture_screenshots(urls_list, progress=progress)
     
     if not screenshot_paths:
-        return None, None, "❌ Failed to capture screenshot."
+        return None, None, "❌ Failed to capture screenshots."
         
     # Create PDF
     progress(0.8, desc="📄 Generating PDF...")
     pdf_filename = f"capture_{int(time.time())}.pdf"
     pdf_path = create_pdf(screenshot_paths, pdf_filename)
     
-    return screenshot_paths, pdf_path, "✅ Capture Complete."
+    return screenshot_paths, pdf_path, f"✅ Capture Complete. {len(screenshot_paths)} page(s) captured."
 
 # --- UPDATED FUNCTION 3: SCHEMA GENERATION ---
-def run_schema_update(url, api_key, progress=gr.Progress()):
-    if not url:
-        return "Please enter a URL.", "", "", 0, 0
+def run_schema_update(urls_input, api_key, progress=gr.Progress()):
+    if not urls_input:
+        return "Please enter URL(s).", "", "", 0, 0
     if not api_key:
         return "Please enter a Gemini API Key.", "", "", 0, 0
 
+    # Parse comma-separated URLs (for now, process only the first one for schema)
+    urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
+    url = urls_list[0]  # Process first URL
+    
     if not url.startswith("http"):
         url = "https://" + url
 
@@ -94,7 +113,9 @@ def run_schema_update(url, api_key, progress=gr.Progress()):
     # Returns 5 values: old_schema, new_schema_str, old_score, new_score, summary
     old_schema, new_schema, old_score, new_score, summary = generate_improved_schema(url, api_key)
 
-    status_text = f"✅ Analysis Complete.\nSummary: {summary}"
+    status_text = f"✅ Analysis Complete for {url}\nSummary: {summary}"
+    if len(urls_list) > 1:
+        status_text += f"\n⚠️ Note: Only processed first URL. {len(urls_list)-1} URL(s) skipped."
 
     return status_text, old_schema, new_schema, old_score, new_score
 
@@ -129,10 +150,14 @@ def confirm_and_update(url, new_schema_content, wp_user, wp_pass):
     return log_msg, filename
     
 # --- NEW FUNCTION 5: AUTO-FIX LOOP ---
-def auto_fix_schema(url, api_key, wp_user, wp_pass, progress=gr.Progress()):
-    if not url or not api_key or not wp_user or not wp_pass:
+def auto_fix_schema(urls_input, api_key, wp_user, wp_pass, progress=gr.Progress()):
+    if not urls_input or not api_key or not wp_user or not wp_pass:
         return "Error: All fields (URL, API Key, WP User, WP Pass) are required for Auto-Fix.", "", "", 0, 0
 
+    # Parse comma-separated URLs (for now, process only the first one)
+    urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
+    url = urls_list[0]  # Process first URL
+    
     if not url.startswith("http"):
         url = "https://" + url
 
@@ -156,13 +181,19 @@ def auto_fix_schema(url, api_key, wp_user, wp_pass, progress=gr.Progress()):
         success, message = push_schema_to_wordpress(url, wp_user, wp_pass, new_schema_str)
         
         if success:
-            final_msg = f"✅ AUTO-FIX SUCCESSFUL!\n\nSummary: {summary}\n\nWP Update: {message}"
+            final_msg = f"✅ AUTO-FIX SUCCESSFUL for {url}!\n\nSummary: {summary}\n\nWP Update: {message}"
         else:
-            final_msg = f"⚠️ Schema Improved but Update Failed.\n\nSummary: {summary}\n\nWP Error: {message}"
+            final_msg = f"⚠️ Schema Improved but Update Failed for {url}.\n\nSummary: {summary}\n\nWP Error: {message}"
+        
+        if len(urls_list) > 1:
+            final_msg += f"\n⚠️ Note: Only processed first URL. {len(urls_list)-1} URL(s) skipped."
             
         return final_msg, old_schema, new_schema_str, old_score, new_score
     else:
-        return f"ℹ️ No improvement found. Old Score: {old_score}, New Score: {new_score}. No update performed.", old_schema, new_schema_str, old_score, new_score
+        msg = f"ℹ️ No improvement found for {url}. Old Score: {old_score}, New Score: {new_score}. No update performed."
+        if len(urls_list) > 1:
+            msg += f"\n⚠️ Note: Only processed first URL. {len(urls_list)-1} URL(s) skipped."
+        return msg, old_schema, new_schema_str, old_score, new_score
 
 # --- FUNCTION 6: META TAGS UI LOGIC ---
 def run_meta_gen(urls_text, api_key, progress=gr.Progress()):
@@ -200,6 +231,45 @@ def run_meta_update(df, wp_user, wp_pass, progress=gr.Progress()):
         
     return "\n".join(log)
 
+# --- FUNCTION 7: SITEMAP URL EXTRACTOR ---
+def run_sitemap_extract(homepage_url, progress=gr.Progress()):
+    if not homepage_url:
+        return None, "Please enter a homepage URL.", None
+    
+    if not homepage_url.startswith("http"):
+        homepage_url = "https://" + homepage_url
+    
+    progress(0.1, desc="🔍 Looking for sitemap...")
+    
+    # Try common sitemap locations
+    sitemap_url = urljoin(homepage_url, "sitemap.xml")
+    
+    progress(0.3, desc=f"📥 Fetching from {sitemap_url}...")
+    urls = fetch_sitemap_urls(sitemap_url)
+    
+    if not urls:
+        # Try sitemap_index.xml as fallback
+        sitemap_url = urljoin(homepage_url, "sitemap_index.xml")
+        progress(0.5, desc=f"📥 Trying {sitemap_url}...")
+        urls = fetch_sitemap_urls(sitemap_url)
+    
+    if not urls:
+        return None, f"❌ No URLs found. Tried {sitemap_url}", None
+    
+    progress(0.9, desc="📋 Preparing results...")
+    
+    # Create DataFrame
+    df = pd.DataFrame({"URL": sorted(list(urls))})
+    
+    # Save to CSV
+    timestamp = int(time.time())
+    filename = f"sitemap_urls_{timestamp}.csv"
+    df.to_csv(filename, index=False)
+    
+    status = f"✅ Found {len(urls)} URLs from sitemap"
+    
+    return df, status, filename
+
 # --- UI BUILDER ---
 def create_ui():
     with gr.Blocks(title="Advanced SEO Auditor", theme=gr.themes.Soft(primary_hue="blue")) as demo:
@@ -217,8 +287,9 @@ def create_ui():
             # Tab 1: Audit
             with gr.Tab("Audit Website"):
                 gr.Markdown("### 1. Crawl & Analyze")
+                gr.Markdown("_Enter a single URL to scan via sitemap, or comma-separated URLs to audit specific pages._")
                 with gr.Row():
-                    url_input_audit = gr.Textbox(label="Start URL", placeholder="https://example.com")
+                    url_input_audit = gr.Textbox(label="URL(s)", placeholder="https://example.com OR https://site.com/page1, https://site.com/page2", lines=2)
                     max_pages_input = gr.Number(label="Max Pages", value=10, precision=0)
                 
                 audit_btn = gr.Button("🚀 Start Audit", variant="primary")
@@ -237,7 +308,8 @@ def create_ui():
             # Tab 2: Capture
             with gr.Tab("Capture & PDF"):
                 gr.Markdown("### 1. Capture Screenshots")
-                url_input_capture = gr.Textbox(label="Page URL", placeholder="https://example.com")
+                gr.Markdown("_Enter comma-separated URLs to capture multiple pages in one PDF._")
+                url_input_capture = gr.Textbox(label="URL(s)", placeholder="https://example.com OR https://site.com/page1, https://site.com/page2", lines=2)
                 capture_btn = gr.Button("📸 Capture & Create PDF", variant="primary")
                 capture_status = gr.Markdown("Ready.")
                 
@@ -254,7 +326,8 @@ def create_ui():
             # Tab 3: Schema Updater
             with gr.Tab("Schema Updater"):
                 gr.Markdown("### 1. Analyze & Improve Schema")
-                url_input_schema = gr.Textbox(label="Page URL", placeholder="https://example.com/services/wedding")
+                gr.Markdown("_Enter a URL to analyze. For multiple URLs, only the first will be processed._")
+                url_input_schema = gr.Textbox(label="URL(s)", placeholder="https://example.com/services/wedding", lines=2)
 
                 with gr.Row():
                     generate_schema_btn = gr.Button("Generate Improved Schema", variant="primary")
@@ -335,6 +408,25 @@ def create_ui():
                     run_meta_update,
                     inputs=[meta_df, wp_user_input, wp_pass_input],
                     outputs=[meta_log]
+                )
+
+            # Tab 5: Sitemap URL Extractor
+            with gr.Tab("Sitemap Extractor"):
+                gr.Markdown("### Extract All URLs from Sitemap")
+                gr.Markdown("Enter your homepage URL and this tool will recursively fetch all URLs from your sitemap.xml (including nested sitemaps).")
+                
+                sitemap_url_input = gr.Textbox(label="Homepage URL", placeholder="https://example.com")
+                sitemap_extract_btn = gr.Button("🗺️ Extract URLs", variant="primary")
+                sitemap_status = gr.Markdown("Ready.")
+                
+                gr.Markdown("### Results")
+                sitemap_df = gr.Dataframe(label="Extracted URLs", interactive=False)
+                sitemap_download = gr.File(label="Download CSV")
+                
+                sitemap_extract_btn.click(
+                    run_sitemap_extract,
+                    inputs=[sitemap_url_input],
+                    outputs=[sitemap_df, sitemap_status, sitemap_download]
                 )
 
     return demo
