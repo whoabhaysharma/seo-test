@@ -58,8 +58,8 @@ def generate_improved_schema(url: str, api_key: str):
     Output Requirement:
     Return ONLY a valid JSON object with this exact structure:
     {
-        "old_score": 5,
-        "new_score": 9,
+        "old_score": "<number>",
+        "new_score": "<number>",
         "new_schema": { ... your json ld object ... },
         "improvement_summary": "Added missing aggregateRating and price attributes."
     }
