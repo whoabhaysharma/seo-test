@@ -355,6 +355,57 @@ def create_ui():
                     download_schema_file = gr.File(label="Download Backup")
                 
                 update_log = gr.Textbox(label="Update Logs", interactive=False, lines=4)
+                
+                # PHP Setup Instructions
+                with gr.Accordion("ℹ️ WordPress Setup Required (Click to expand)", open=False):
+                    gr.Markdown("""
+                    ### 📋 One-Time Setup: Add this PHP code to your WordPress theme
+                    
+                    To make the schema visible on your website, add the following code to your theme's `functions.php` file:
+                    
+                    **Path:** `Appearance > Theme File Editor > Theme Functions (functions.php)`
+                    
+                    ```php
+                    <?php
+                    /*
+                     * Register custom meta field for Schema JSON
+                     */
+                    function register_custom_schema_meta() {
+                        register_meta('post', 'custom_schema_json', array(
+                            'show_in_rest' => true,
+                            'single'       => true,
+                            'type'         => 'string',
+                            'auth_callback' => function() { return current_user_can('edit_posts'); }
+                        ));
+                    }
+                    add_action('init', 'register_custom_schema_meta');
+
+                    /*
+                     * Output the JSON-LD schema in the <head> of the frontend
+                     */
+                    function print_custom_schema_json() {
+                        $post_id = get_the_ID();
+                        if ($post_id) {
+                            $schema_json = get_post_meta($post_id, 'custom_schema_json', true);
+                            if (!empty($schema_json)) {
+                                echo "\\n<!-- Custom Generated Schema -->\\n";
+                                echo '<script type="application/ld+json">';
+                                echo stripslashes($schema_json);
+                                echo '</script>';
+                                echo "\\n<!-- End Custom Schema -->\\n";
+                            }
+                        }
+                    }
+                    add_action('wp_head', 'print_custom_schema_json');
+                    ?>
+                    ```
+                    
+                    **⚠️ Important Notes:**
+                    - Add this code **only once** to your `functions.php` file
+                    - This enables the REST API to receive schema updates from this tool
+                    - The schema will automatically appear in the `<head>` section of your pages
+                    - You can verify it by viewing the page source (Ctrl+U) and searching for "Custom Generated Schema"
+                    """)
 
                 # Connect Logic
                 generate_schema_btn.click(
