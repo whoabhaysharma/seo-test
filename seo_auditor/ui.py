@@ -9,7 +9,7 @@ from .analyzer import analyze_page
 from .reporter import prepare_dataframe, save_excel
 from .capturer import capture_screenshots, create_pdf
 
-def run_audit_ui(target_url, progress=gr.Progress()):
+def run_audit_ui(target_url, audit_all_pages, max_pages, progress=gr.Progress()):
     if not target_url.startswith("http"):
         target_url = "https://" + target_url
 
@@ -22,7 +22,18 @@ def run_audit_ui(target_url, progress=gr.Progress()):
     # Find pages
     pages = {target_url}
     pages = fetch_sitemap_urls(urljoin(target_url, "/sitemap.xml"), pages)
-    page_list = sorted(list(pages))[:MAX_PAGES_TO_SCAN]
+
+    page_list = sorted(list(pages))
+
+    if not audit_all_pages:
+        try:
+            limit = int(max_pages) if max_pages is not None else MAX_PAGES_TO_SCAN
+            if limit <= 0:
+                limit = MAX_PAGES_TO_SCAN
+        except (ValueError, TypeError):
+            limit = MAX_PAGES_TO_SCAN
+
+        page_list = page_list[:limit]
 
     data = []
     # Audit phase
@@ -116,6 +127,10 @@ def create_ui():
                     url_input_audit = gr.Textbox(label="Website URL", placeholder="https://example.com")
                     audit_btn = gr.Button("Start Audit", variant="primary")
 
+                with gr.Row():
+                    audit_all_pages_checkbox = gr.Checkbox(label="Audit all pages found", value=False)
+                    max_pages_input = gr.Number(label="Max pages to audit", value=MAX_PAGES_TO_SCAN, precision=0)
+
                 status_output_audit = gr.Markdown("Ready to scan.")
 
                 with gr.Row():
@@ -131,7 +146,7 @@ def create_ui():
 
                 audit_btn.click(
                     run_audit_ui,
-                    inputs=[url_input_audit],
+                    inputs=[url_input_audit, audit_all_pages_checkbox, max_pages_input],
                     outputs=[status_output_audit, data_preview, download_btn_audit]
                 )
 
