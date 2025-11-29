@@ -7,7 +7,6 @@ from urllib.parse import urlparse, urljoin
 # ==========================================
 # 📦 LOCAL IMPORTS
 # ==========================================
-# Ensure these files exist in your 'seo_auditor' folder or adjust imports accordingly
 try:
     from .config import MAX_PAGES_TO_SCAN
     from .crawler import check_robots_txt, fetch_sitemap_urls
@@ -19,7 +18,6 @@ try:
     from .meta_gen import generate_meta_tags
     from .image_alt_updater import fetch_page_images, update_image_alts
 except ImportError:
-    # Fallback for when running directly or if imports are missing
     pass
 
 # ==========================================
@@ -397,7 +395,7 @@ def create_ui():
                         with gr.Group():
                             audit_status = gr.Markdown("Waiting for input...")
                             with gr.Accordion("📊 Audit Results", open=True):
-                                # REMOVED height=... for Gradio 5.x compatibility
+                                # FIXED: Removed height param
                                 audit_df = gr.Dataframe(interactive=False)
                                 audit_download = gr.File(label="Download Report (.xlsx)")
 
@@ -440,7 +438,8 @@ def create_ui():
                             with gr.Row():
                                 save_schema_btn = gr.Button("Confirm & Update Live Site", variant="stop")
                                 download_schema_file = gr.File(label="Download JSON Backup")
-                            update_log = gr.Code(label="Transaction Logs", language="text")
+                            # FIXED: Changed from gr.Code(language="text") to gr.Textbox
+                            update_log = gr.Textbox(label="Transaction Logs", interactive=False, lines=10, show_copy_button=True)
 
                         # Connect Logic
                         generate_schema_btn.click(
@@ -475,7 +474,7 @@ def create_ui():
                         meta_status = gr.Markdown()
                         
                         gr.Markdown("**Review Suggestions (Double click cells to edit)**")
-                        # REMOVED height=... for Gradio 5.x compatibility
+                        # FIXED: Removed height param
                         meta_df = gr.Dataframe(
                             headers=["URL", "Old Title", "New Title", "Old Desc", "New Desc"],
                             interactive=True,
@@ -484,7 +483,8 @@ def create_ui():
                         
                         with gr.Row():
                             meta_update_btn = gr.Button("🚀 Push Updates to WordPress", variant="stop")
-                            meta_log = gr.Code(label="Update Log", language="text", lines=5)
+                            # FIXED: Changed from gr.Code(language="text") to gr.Textbox
+                            meta_log = gr.Textbox(label="Update Log", interactive=False, lines=5, show_copy_button=True)
 
                         meta_gen_btn.click(run_meta_gen, inputs=[meta_urls_input, api_key_input], outputs=[meta_df, meta_status])
                         meta_update_btn.click(run_meta_update, inputs=[meta_df, wp_user_input, wp_pass_input], outputs=[meta_log])
