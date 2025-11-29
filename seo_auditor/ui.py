@@ -5,9 +5,9 @@ import json
 from urllib.parse import urlparse, urljoin
 
 # ==========================================
-# 📦 LOCAL MODULE IMPORTS
-# (Ensure these files exist in your directory)
+# 📦 LOCAL IMPORTS
 # ==========================================
+# Ensure these files exist in your 'seo_auditor' folder or adjust imports accordingly
 try:
     from .config import MAX_PAGES_TO_SCAN
     from .crawler import check_robots_txt, fetch_sitemap_urls
@@ -17,32 +17,27 @@ try:
     from .schema_gen import generate_improved_schema
     from .wp_handler import push_schema_to_wordpress, update_page_meta
     from .meta_gen import generate_meta_tags
-except ImportError as e:
-    print(f"⚠️ Import Error: {e}")
-    print("Ensure you are running this as a module or that local files exist.")
+except ImportError:
+    # Fallback for when running directly or if imports are missing
+    pass
 
 # ==========================================
-# 🧠 LOGIC FUNCTIONS (Backend Wrappers)
+# 🧠 LOGIC HANDLERS
 # ==========================================
 
-# --- FUNCTION 1: AUDIT ---
 def run_audit_ui(urls_input, max_pages, progress=gr.Progress()):
     if not urls_input:
         return None, None, "Please enter URL(s)."
     
-    # Parse comma-separated URLs
     urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
     
-    # Normalize URLs
     for i, url in enumerate(urls_list):
         if not url.startswith("http"):
             urls_list[i] = "https://" + url
     
-    # If single URL, try sitemap discovery
     if len(urls_list) == 1:
         start_url = urls_list[0]
         domain_netloc = urlparse(start_url).netloc
-        
         progress(0.1, desc="🔍 Discovering pages...")
         sitemap_url = urljoin(start_url, "sitemap.xml")
         found_sitemap = fetch_sitemap_urls(sitemap_url)
@@ -51,77 +46,60 @@ def run_audit_ui(urls_input, max_pages, progress=gr.Progress()):
         else:
             urls_to_scan = urls_list
     else:
-        # Multiple URLs provided, use them directly
         urls_to_scan = urls_list
         domain_netloc = urlparse(urls_to_scan[0]).netloc
     
-    # Limit
     if max_pages > 0:
         urls_to_scan = urls_to_scan[:int(max_pages)]
         
-    # 2. Analysis
     results = []
     for i, url in enumerate(urls_to_scan):
         progress((i + 1) / len(urls_to_scan), desc=f"Analyzing {url}")
         res = analyze_page(url, domain_netloc)
         results.append(res)
         
-    # 3. Report
     df = pd.DataFrame(results)
     df_display = prepare_dataframe(df)
     
-    # Save Excel
     timestamp = int(time.time())
     filename = f"audit_report_{timestamp}.xlsx"
     save_excel(df_display, filename)
     
     return df_display, filename, f"✅ Audit Complete. Scanned {len(urls_to_scan)} pages."
 
-# --- FUNCTION 2: CAPTURE ---
 def run_capture_ui(urls_input, progress=gr.Progress()):
     if not urls_input:
         return None, None, "Please enter URL(s)."
     
-    # Parse comma-separated URLs
     urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
-    
-    # Normalize URLs
     for i, url in enumerate(urls_list):
         if not url.startswith("http"):
             urls_list[i] = "https://" + url
         
     progress(0.2, desc=f"📸 Capturing {len(urls_list)} page(s)...")
-    
-    # Capture
     screenshot_paths = capture_screenshots(urls_list, progress=progress)
     
     if not screenshot_paths:
         return None, None, "❌ Failed to capture screenshots."
         
-    # Create PDF
     progress(0.8, desc="📄 Generating PDF...")
     pdf_filename = f"capture_{int(time.time())}.pdf"
     pdf_path = create_pdf(screenshot_paths, pdf_filename)
     
     return screenshot_paths, pdf_path, f"✅ Capture Complete. {len(screenshot_paths)} page(s) captured."
 
-# --- FUNCTION 3: SCHEMA GENERATION ---
 def run_schema_update(urls_input, api_key, progress=gr.Progress()):
     if not urls_input:
         return "Please enter URL(s).", "", "", 0, 0
     if not api_key:
         return "Please enter a Gemini API Key.", "", "", 0, 0
 
-    # Parse comma-separated URLs
     urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
-    url = urls_list[0]  # Process first URL
-    
+    url = urls_list[0]
     if not url.startswith("http"):
         url = "https://" + url
 
     progress(0, desc="🚀 Initializing...")
-    
-    # Returns 5 values: old_schema, new_schema_str, old_score, new_score, summary
     old_schema, new_schema, old_score, new_score, summary = generate_improved_schema(url, api_key)
 
     status_text = f"✅ Analysis Complete for {url}\nSummary: {summary}"
@@ -130,18 +108,14 @@ def run_schema_update(urls_input, api_key, progress=gr.Progress()):
 
     return status_text, old_schema, new_schema, old_score, new_score
 
-# --- FUNCTION 4: CONFIRM & PUSH TO WORDPRESS ---
 def confirm_and_update(url, new_schema_content, wp_user, wp_pass):
     if not new_schema_content:
         return "Error: No schema content generated yet.", None
-
     if not wp_user or not wp_pass:
         return "Error: WordPress Username and App Password are required.", None
-
     if not url.startswith("http"):
         url = "https://" + url
 
-    # 1. Save Local Backup
     timestamp = int(time.time())
     filename = f"backup_schema_{timestamp}.json"
     try:
@@ -150,7 +124,6 @@ def confirm_and_update(url, new_schema_content, wp_user, wp_pass):
     except Exception as e:
         return f"Error saving local backup: {e}", None
 
-    # 2. Push to Live Site
     success, message = push_schema_to_wordpress(url, wp_user, wp_pass, new_schema_content)
     
     if success:
@@ -160,33 +133,24 @@ def confirm_and_update(url, new_schema_content, wp_user, wp_pass):
     
     return log_msg, filename
     
-# --- FUNCTION 5: AUTO-FIX LOOP ---
 def auto_fix_schema(urls_input, api_key, wp_user, wp_pass, progress=gr.Progress()):
     if not urls_input or not api_key or not wp_user or not wp_pass:
-        return "Error: All fields (URL, API Key, WP User, WP Pass) are required for Auto-Fix.", "", "", 0, 0
+        return "Error: All fields are required for Auto-Fix.", "", "", 0, 0
 
     urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
     url = urls_list[0]
-    
     if not url.startswith("http"):
         url = "https://" + url
 
     progress(0.1, desc="🔍 Analyzing & Generating Schema...")
-    
-    # 1. Generate Schema
     old_schema, new_schema_str, old_score, new_score, summary = generate_improved_schema(url, api_key)
     
-    # Check if generation failed
     if not new_schema_str or "Error" in summary:
         return f"❌ Generation Failed: {summary}", old_schema, "", old_score, new_score
 
     progress(0.5, desc="📊 Evaluating Improvement...")
-    
-    # 2. Decide whether to update
     if new_score > old_score:
         progress(0.7, desc="🚀 Pushing to WordPress...")
-        
-        # 3. Push to WP
         success, message = push_schema_to_wordpress(url, wp_user, wp_pass, new_schema_str)
         
         if success:
@@ -202,47 +166,37 @@ def auto_fix_schema(urls_input, api_key, wp_user, wp_pass, progress=gr.Progress(
         msg = f"ℹ️ No improvement found for {url}. Old Score: {old_score}, New Score: {new_score}. No update performed."
         return msg, old_schema, new_schema_str, old_score, new_score
 
-# --- FUNCTION 6: META TAGS LOGIC ---
 def run_meta_gen(urls_text, api_key, progress=gr.Progress()):
     if not urls_text or not api_key:
         return pd.DataFrame(), "Please enter URLs and API Key."
         
     urls = [u.strip() for u in urls_text.split(',') if u.strip()]
     progress(0.1, desc="🧠 Generating Meta Tags...")
-    
     results = generate_meta_tags(urls, api_key)
     df = pd.DataFrame(results)
-    
     return df, f"✅ Generated suggestions for {len(results)} pages."
 
 def run_meta_update(df, wp_user, wp_pass, progress=gr.Progress()):
     if df is None or df.empty:
         return "No data to update."
-    
     if not wp_user or not wp_pass:
         return "Please enter WP Credentials."
         
     log = []
     total = len(df)
-    
     for i, row in df.iterrows():
         url = row['URL']
         new_title = row['New Title']
         new_desc = row['New Desc']
-        
         progress((i+1)/total, desc=f"Updating {url}...")
-        
         success, msg = update_page_meta(url, wp_user, wp_pass, new_title, new_desc)
         status = "✅" if success else "❌"
         log.append(f"{status} {url}: {msg}")
-        
     return "\n".join(log)
 
-# --- FUNCTION 7: SITEMAP EXTRACTOR ---
 def run_sitemap_extract(homepage_url, progress=gr.Progress()):
     if not homepage_url:
         return None, "Please enter a homepage URL.", None
-    
     if not homepage_url.startswith("http"):
         homepage_url = "https://" + homepage_url
     
@@ -273,7 +227,6 @@ def run_sitemap_extract(homepage_url, progress=gr.Progress()):
 # 🎨 UI REDESIGN (Modern / Dashboard)
 # ==========================================
 
-# Custom CSS for the "Modern Web App" look
 custom_css = """
 body { background-color: #f8fafc; }
 .gradio-container { max-width: 95% !important; margin-top: 20px; }
@@ -285,7 +238,6 @@ h1, h2, h3 { font-family: 'Inter', sans-serif; }
 .card { background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 20px; }
 """
 
-# Theme Configuration
 theme = gr.themes.Soft(
     primary_hue="indigo",
     neutral_hue="slate",
@@ -378,7 +330,8 @@ def create_ui():
                         with gr.Group():
                             audit_status = gr.Markdown("Waiting for input...")
                             with gr.Accordion("📊 Audit Results", open=True):
-                                audit_df = gr.Dataframe(interactive=False, height=400)
+                                # REMOVED height=... for Gradio 5.x compatibility
+                                audit_df = gr.Dataframe(interactive=False)
                                 audit_download = gr.File(label="Download Report (.xlsx)")
 
                         audit_btn.click(
@@ -455,11 +408,11 @@ def create_ui():
                         meta_status = gr.Markdown()
                         
                         gr.Markdown("**Review Suggestions (Double click cells to edit)**")
+                        # REMOVED height=... for Gradio 5.x compatibility
                         meta_df = gr.Dataframe(
                             headers=["URL", "Old Title", "New Title", "Old Desc", "New Desc"],
                             interactive=True,
-                            wrap=True,
-                            height=300
+                            wrap=True
                         )
                         
                         with gr.Row():
