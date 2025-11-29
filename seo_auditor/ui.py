@@ -4,24 +4,276 @@ import time
 import json
 from urllib.parse import urlparse, urljoin
 
-# --- MOCK IMPORTS (Keep your actual imports here) ---
-# For this code to run standalone in the example, I am keeping your imports.
-# In your actual file, keep the lines below:
-from .config import MAX_PAGES_TO_SCAN
-from .crawler import check_robots_txt, fetch_sitemap_urls
-from .analyzer import analyze_page
-from .reporter import prepare_dataframe, save_excel
-from .capturer import capture_screenshots, create_pdf
-from .schema_gen import generate_improved_schema
-from .wp_handler import push_schema_to_wordpress, update_page_meta
-from .meta_gen import generate_meta_tags
+# ==========================================
+# 📦 LOCAL MODULE IMPORTS
+# (Ensure these files exist in your directory)
+# ==========================================
+try:
+    from .config import MAX_PAGES_TO_SCAN
+    from .crawler import check_robots_txt, fetch_sitemap_urls
+    from .analyzer import analyze_page
+    from .reporter import prepare_dataframe, save_excel
+    from .capturer import capture_screenshots, create_pdf
+    from .schema_gen import generate_improved_schema
+    from .wp_handler import push_schema_to_wordpress, update_page_meta
+    from .meta_gen import generate_meta_tags
+except ImportError as e:
+    print(f"⚠️ Import Error: {e}")
+    print("Ensure you are running this as a module or that local files exist.")
 
-# --- LOGIC FUNCTIONS (UNCHANGED) ---
-# [ ... Insert all your existing logic functions here (run_audit_ui, etc) ... ]
-# I will reference the function names assuming they exist as defined in your prompt.
+# ==========================================
+# 🧠 LOGIC FUNCTIONS (Backend Wrappers)
+# ==========================================
 
-# --- CUSTOM CSS & THEME ---
-# This creates the "Modern Web App" look
+# --- FUNCTION 1: AUDIT ---
+def run_audit_ui(urls_input, max_pages, progress=gr.Progress()):
+    if not urls_input:
+        return None, None, "Please enter URL(s)."
+    
+    # Parse comma-separated URLs
+    urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
+    
+    # Normalize URLs
+    for i, url in enumerate(urls_list):
+        if not url.startswith("http"):
+            urls_list[i] = "https://" + url
+    
+    # If single URL, try sitemap discovery
+    if len(urls_list) == 1:
+        start_url = urls_list[0]
+        domain_netloc = urlparse(start_url).netloc
+        
+        progress(0.1, desc="🔍 Discovering pages...")
+        sitemap_url = urljoin(start_url, "sitemap.xml")
+        found_sitemap = fetch_sitemap_urls(sitemap_url)
+        if found_sitemap:
+            urls_to_scan = list(found_sitemap)
+        else:
+            urls_to_scan = urls_list
+    else:
+        # Multiple URLs provided, use them directly
+        urls_to_scan = urls_list
+        domain_netloc = urlparse(urls_to_scan[0]).netloc
+    
+    # Limit
+    if max_pages > 0:
+        urls_to_scan = urls_to_scan[:int(max_pages)]
+        
+    # 2. Analysis
+    results = []
+    for i, url in enumerate(urls_to_scan):
+        progress((i + 1) / len(urls_to_scan), desc=f"Analyzing {url}")
+        res = analyze_page(url, domain_netloc)
+        results.append(res)
+        
+    # 3. Report
+    df = pd.DataFrame(results)
+    df_display = prepare_dataframe(df)
+    
+    # Save Excel
+    timestamp = int(time.time())
+    filename = f"audit_report_{timestamp}.xlsx"
+    save_excel(df_display, filename)
+    
+    return df_display, filename, f"✅ Audit Complete. Scanned {len(urls_to_scan)} pages."
+
+# --- FUNCTION 2: CAPTURE ---
+def run_capture_ui(urls_input, progress=gr.Progress()):
+    if not urls_input:
+        return None, None, "Please enter URL(s)."
+    
+    # Parse comma-separated URLs
+    urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
+    
+    # Normalize URLs
+    for i, url in enumerate(urls_list):
+        if not url.startswith("http"):
+            urls_list[i] = "https://" + url
+        
+    progress(0.2, desc=f"📸 Capturing {len(urls_list)} page(s)...")
+    
+    # Capture
+    screenshot_paths = capture_screenshots(urls_list, progress=progress)
+    
+    if not screenshot_paths:
+        return None, None, "❌ Failed to capture screenshots."
+        
+    # Create PDF
+    progress(0.8, desc="📄 Generating PDF...")
+    pdf_filename = f"capture_{int(time.time())}.pdf"
+    pdf_path = create_pdf(screenshot_paths, pdf_filename)
+    
+    return screenshot_paths, pdf_path, f"✅ Capture Complete. {len(screenshot_paths)} page(s) captured."
+
+# --- FUNCTION 3: SCHEMA GENERATION ---
+def run_schema_update(urls_input, api_key, progress=gr.Progress()):
+    if not urls_input:
+        return "Please enter URL(s).", "", "", 0, 0
+    if not api_key:
+        return "Please enter a Gemini API Key.", "", "", 0, 0
+
+    # Parse comma-separated URLs
+    urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
+    url = urls_list[0]  # Process first URL
+    
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    progress(0, desc="🚀 Initializing...")
+    
+    # Returns 5 values: old_schema, new_schema_str, old_score, new_score, summary
+    old_schema, new_schema, old_score, new_score, summary = generate_improved_schema(url, api_key)
+
+    status_text = f"✅ Analysis Complete for {url}\nSummary: {summary}"
+    if len(urls_list) > 1:
+        status_text += f"\n⚠️ Note: Only processed first URL. {len(urls_list)-1} URL(s) skipped."
+
+    return status_text, old_schema, new_schema, old_score, new_score
+
+# --- FUNCTION 4: CONFIRM & PUSH TO WORDPRESS ---
+def confirm_and_update(url, new_schema_content, wp_user, wp_pass):
+    if not new_schema_content:
+        return "Error: No schema content generated yet.", None
+
+    if not wp_user or not wp_pass:
+        return "Error: WordPress Username and App Password are required.", None
+
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    # 1. Save Local Backup
+    timestamp = int(time.time())
+    filename = f"backup_schema_{timestamp}.json"
+    try:
+        with open(filename, "w") as f:
+            f.write(new_schema_content)
+    except Exception as e:
+        return f"Error saving local backup: {e}", None
+
+    # 2. Push to Live Site
+    success, message = push_schema_to_wordpress(url, wp_user, wp_pass, new_schema_content)
+    
+    if success:
+        log_msg = f"✅ LIVE UPDATE SUCCESSFUL!\n{message}\n📁 Backup saved: {filename}"
+    else:
+        log_msg = f"❌ UPDATE FAILED\n{message}\n📁 Backup saved: {filename}"
+    
+    return log_msg, filename
+    
+# --- FUNCTION 5: AUTO-FIX LOOP ---
+def auto_fix_schema(urls_input, api_key, wp_user, wp_pass, progress=gr.Progress()):
+    if not urls_input or not api_key or not wp_user or not wp_pass:
+        return "Error: All fields (URL, API Key, WP User, WP Pass) are required for Auto-Fix.", "", "", 0, 0
+
+    urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
+    url = urls_list[0]
+    
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    progress(0.1, desc="🔍 Analyzing & Generating Schema...")
+    
+    # 1. Generate Schema
+    old_schema, new_schema_str, old_score, new_score, summary = generate_improved_schema(url, api_key)
+    
+    # Check if generation failed
+    if not new_schema_str or "Error" in summary:
+        return f"❌ Generation Failed: {summary}", old_schema, "", old_score, new_score
+
+    progress(0.5, desc="📊 Evaluating Improvement...")
+    
+    # 2. Decide whether to update
+    if new_score > old_score:
+        progress(0.7, desc="🚀 Pushing to WordPress...")
+        
+        # 3. Push to WP
+        success, message = push_schema_to_wordpress(url, wp_user, wp_pass, new_schema_str)
+        
+        if success:
+            final_msg = f"✅ AUTO-FIX SUCCESSFUL for {url}!\n\nSummary: {summary}\n\nWP Update: {message}"
+        else:
+            final_msg = f"⚠️ Schema Improved but Update Failed for {url}.\n\nSummary: {summary}\n\nWP Error: {message}"
+        
+        if len(urls_list) > 1:
+            final_msg += f"\n⚠️ Note: Only processed first URL. {len(urls_list)-1} URL(s) skipped."
+            
+        return final_msg, old_schema, new_schema_str, old_score, new_score
+    else:
+        msg = f"ℹ️ No improvement found for {url}. Old Score: {old_score}, New Score: {new_score}. No update performed."
+        return msg, old_schema, new_schema_str, old_score, new_score
+
+# --- FUNCTION 6: META TAGS LOGIC ---
+def run_meta_gen(urls_text, api_key, progress=gr.Progress()):
+    if not urls_text or not api_key:
+        return pd.DataFrame(), "Please enter URLs and API Key."
+        
+    urls = [u.strip() for u in urls_text.split(',') if u.strip()]
+    progress(0.1, desc="🧠 Generating Meta Tags...")
+    
+    results = generate_meta_tags(urls, api_key)
+    df = pd.DataFrame(results)
+    
+    return df, f"✅ Generated suggestions for {len(results)} pages."
+
+def run_meta_update(df, wp_user, wp_pass, progress=gr.Progress()):
+    if df is None or df.empty:
+        return "No data to update."
+    
+    if not wp_user or not wp_pass:
+        return "Please enter WP Credentials."
+        
+    log = []
+    total = len(df)
+    
+    for i, row in df.iterrows():
+        url = row['URL']
+        new_title = row['New Title']
+        new_desc = row['New Desc']
+        
+        progress((i+1)/total, desc=f"Updating {url}...")
+        
+        success, msg = update_page_meta(url, wp_user, wp_pass, new_title, new_desc)
+        status = "✅" if success else "❌"
+        log.append(f"{status} {url}: {msg}")
+        
+    return "\n".join(log)
+
+# --- FUNCTION 7: SITEMAP EXTRACTOR ---
+def run_sitemap_extract(homepage_url, progress=gr.Progress()):
+    if not homepage_url:
+        return None, "Please enter a homepage URL.", None
+    
+    if not homepage_url.startswith("http"):
+        homepage_url = "https://" + homepage_url
+    
+    progress(0.1, desc="🔍 Looking for sitemap...")
+    sitemap_url = urljoin(homepage_url, "sitemap.xml")
+    
+    progress(0.3, desc=f"📥 Fetching from {sitemap_url}...")
+    urls = fetch_sitemap_urls(sitemap_url)
+    
+    if not urls:
+        sitemap_url = urljoin(homepage_url, "sitemap_index.xml")
+        progress(0.5, desc=f"📥 Trying {sitemap_url}...")
+        urls = fetch_sitemap_urls(sitemap_url)
+    
+    if not urls:
+        return None, f"❌ No URLs found. Tried {sitemap_url}", None
+    
+    progress(0.9, desc="📋 Preparing results...")
+    df = pd.DataFrame({"URL": sorted(list(urls))})
+    
+    timestamp = int(time.time())
+    filename = f"sitemap_urls_{timestamp}.csv"
+    df.to_csv(filename, index=False)
+    
+    return df, f"✅ Found {len(urls)} URLs", filename
+
+# ==========================================
+# 🎨 UI REDESIGN (Modern / Dashboard)
+# ==========================================
+
+# Custom CSS for the "Modern Web App" look
 custom_css = """
 body { background-color: #f8fafc; }
 .gradio-container { max-width: 95% !important; margin-top: 20px; }
@@ -29,10 +281,11 @@ h1, h2, h3 { font-family: 'Inter', sans-serif; }
 .contain { background-color: transparent !important; }
 #sidebar { background-color: #ffffff; border-right: 1px solid #e2e8f0; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
 #main_content { background-color: transparent; padding-left: 20px; }
-.primary-btn { background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important; border: none; }
+.primary-btn { background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important; border: none; color: white !important; }
 .card { background: white; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 20px; }
 """
 
+# Theme Configuration
 theme = gr.themes.Soft(
     primary_hue="indigo",
     neutral_hue="slate",
@@ -40,7 +293,6 @@ theme = gr.themes.Soft(
     radius_size=gr.themes.sizes.radius_md,
 )
 
-# --- UI BUILDER ---
 def create_ui():
     with gr.Blocks(title="SEO Command Center", theme=theme, css=custom_css) as demo:
         
@@ -256,7 +508,3 @@ def create_ui():
                                     )
 
     return demo
-
-# To run:
-# ui = create_ui()
-# ui.launch()
