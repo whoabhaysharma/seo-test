@@ -1,6 +1,8 @@
 import gradio as gr
 import pandas as pd
 import time
+import json
+import os
 from urllib.parse import urlparse, urljoin
 
 from .config import MAX_PAGES_TO_SCAN
@@ -8,6 +10,11 @@ from .crawler import check_robots_txt, fetch_sitemap_urls
 from .analyzer import analyze_page
 from .reporter import prepare_dataframe, save_excel
 from .capturer import capture_screenshots, create_pdf
+from .schema_gen import extract_schema_from_url, generate_schema_from_screenshot, compare_and_score_schemas
+from .wordpress_api import WordPressClient
+
+# Helper function to store state
+schema_state = {}
 
 def run_audit_ui(target_url, progress=gr.Progress()):
     if not target_url.startswith("http"):
@@ -103,6 +110,99 @@ def run_capture_ui(target_url_input, capture_all, progress=gr.Progress()):
 
     return status_msg, pdf_path
 
+def run_schema_analysis(urls_input, gemini_key, progress=gr.Progress()):
+    global schema_state
+    schema_state = {} # Reset state
+
+    if not gemini_key:
+        return "Please provide a Gemini API Key.", None, None
+
+    urls = [u.strip() for u in urls_input.split(",") if u.strip()]
+    if not urls:
+        return "Please enter at least one URL.", None, None
+
+    results = []
+
+    for i, url in enumerate(urls):
+        if not url.startswith("http"):
+            url = "https://" + url
+
+        progress((i+1) / len(urls), desc=f"Processing {url}...")
+
+        # 1. Capture Screenshot (reuse capturer but for single)
+        # We need a list for capturer
+        screenshot_paths = capture_screenshots([url])
+        if not screenshot_paths:
+            results.append({"url": url, "error": "Screenshot failed"})
+            continue
+
+        screenshot_path = screenshot_paths[0] # Expect one
+
+        # 2. Extract Existing Schema
+        old_schema = extract_schema_from_url(url)
+
+        # 3. Generate New Schema
+        new_schema = generate_schema_from_screenshot(screenshot_path, gemini_key)
+
+        # 4. Compare & Score
+        comparison = compare_and_score_schemas(old_schema, new_schema, gemini_key)
+
+        # Store in state
+        schema_state[url] = new_schema
+
+        # Format for display
+        results.append({
+            "url": url,
+            "old_score": comparison.get("old_score", 0),
+            "new_score": comparison.get("new_score", 0),
+            "analysis": comparison.get("analysis", ""),
+            "old_schema": json.dumps(old_schema, indent=2) if old_schema else "None",
+            "new_schema": json.dumps(new_schema, indent=2)
+        })
+
+    # Create a nice summary string or markdown
+    summary_md = ""
+    for r in results:
+        if "error" in r:
+            summary_md += f"### ❌ {r['url']}\nError: {r['error']}\n\n---\n"
+        else:
+            summary_md += f"### ✅ {r['url']}\n"
+            summary_md += f"- **Old Score:** {r['old_score']}/10\n"
+            summary_md += f"- **New Score:** {r['new_score']}/10\n"
+            summary_md += f"- **Analysis:** {r['analysis']}\n\n"
+            summary_md += "<details><summary>View Schemas</summary>\n\n"
+            summary_md += "#### Old Schema\n```json\n" + r['old_schema'] + "\n```\n"
+            summary_md += "#### New Schema\n```json\n" + r['new_schema'] + "\n```\n"
+            summary_md += "</details>\n\n---\n"
+
+    return "Analysis Complete. Review results below.", summary_md, json.dumps(results, indent=2)
+
+
+def run_schema_update(wp_url, wp_user, wp_app_pass, progress=gr.Progress()):
+    global schema_state
+
+    if not schema_state:
+        return "No generated schemas found. Please run analysis first."
+
+    if not wp_url or not wp_user or not wp_app_pass:
+        return "Please provide WordPress credentials."
+
+    client = WordPressClient(wp_url, wp_user, wp_app_pass)
+
+    logs = ""
+    success_count = 0
+
+    for i, (url, schema) in enumerate(schema_state.items()):
+        progress((i) / len(schema_state), desc=f"Updating {url}...")
+
+        success, msg = client.update_schema_in_post(url, schema)
+        status_icon = "✅" if success else "❌"
+        logs += f"{status_icon} **{url}**: {msg}\n"
+        if success:
+            success_count += 1
+
+    return f"Update Complete. {success_count}/{len(schema_state)} updated.\n\n" + logs
+
 def create_ui():
     with gr.Blocks(title="Advanced SEO Auditor", theme=gr.themes.Soft(primary_hue="blue")) as demo:
         gr.Markdown("# 🚀 Advanced SEO Auditor")
@@ -153,6 +253,43 @@ def create_ui():
                     run_capture_ui,
                     inputs=[url_input_capture, capture_all_checkbox],
                     outputs=[status_output_capture, download_btn_capture]
+                )
+
+            # Tab 3: Schema Updater
+            with gr.Tab("Schema Updater"):
+                gr.Markdown("Generate and Update JSON-LD Schema using AI and WordPress API.")
+
+                with gr.Row():
+                    gemini_key_input = gr.Textbox(label="Gemini API Key", type="password")
+
+                with gr.Row():
+                    wp_url_input = gr.Textbox(label="WordPress URL", placeholder="https://example.com")
+                    wp_user_input = gr.Textbox(label="WP Username")
+                    wp_pass_input = gr.Textbox(label="WP App Password", type="password")
+
+                with gr.Row():
+                    urls_input_schema = gr.Textbox(label="Target URL(s)", placeholder="https://example.com/page1, https://example.com/page2")
+                    analyze_btn = gr.Button("1. Analyze & Generate Schema", variant="primary")
+
+                schema_status = gr.Markdown("Ready to analyze.")
+                schema_results_md = gr.Markdown("")
+                # Hidden json output to store data if needed, but we use server-side state variable for simplicity in this demo
+                # Note: Server-side global state is not multi-user safe in standard Gradio, but for local tool it's fine.
+                # Ideally use gr.State() but that requires passing it around.
+
+                update_btn = gr.Button("2. Confirm & Update on Website", variant="stop")
+                update_status = gr.Markdown("")
+
+                analyze_btn.click(
+                    run_schema_analysis,
+                    inputs=[urls_input_schema, gemini_key_input],
+                    outputs=[schema_status, schema_results_md, gr.State()] # State is dummy output
+                )
+
+                update_btn.click(
+                    run_schema_update,
+                    inputs=[wp_url_input, wp_user_input, wp_pass_input],
+                    outputs=[update_status]
                 )
 
     return demo

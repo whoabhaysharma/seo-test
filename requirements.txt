@@ -9,3 +9,5 @@ xlsxwriter
 openpyxl
 playwright
 pillow
+google-generativeai
+python-dotenv
