@@ -1,7 +1,8 @@
 import google.generativeai as genai
 from bs4 import BeautifulSoup
-from .utils import get_session
 import re
+import json
+from .utils import get_session
 
 def generate_meta_tags(urls: list[str], api_key: str):
     """
@@ -12,7 +13,15 @@ def generate_meta_tags(urls: list[str], api_key: str):
         return []
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    # 1. Configure for JSON Mode
+    # This forces the model to output valid JSON, preventing parsing errors
+    generation_config = {
+        "response_mime_type": "application/json",
+    }
+    
+    # 2. Use the requested Gemini 2.5 Flash model
+    model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config)
     session = get_session()
 
     results = []
@@ -25,7 +34,7 @@ def generate_meta_tags(urls: list[str], api_key: str):
             url = "https://" + url
 
         try:
-            # 1. Fetch Page Content
+            # --- Fetch Page Content ---
             resp = session.get(url, timeout=10)
             if resp.status_code >= 400:
                 results.append({
@@ -39,7 +48,7 @@ def generate_meta_tags(urls: list[str], api_key: str):
 
             soup = BeautifulSoup(resp.text, "lxml")
 
-            # 2. Extract Current Metadata
+            # --- Extract Current Metadata ---
             old_title = ""
             if soup.title and soup.title.string:
                 old_title = soup.title.string.strip()
@@ -49,14 +58,14 @@ def generate_meta_tags(urls: list[str], api_key: str):
             if meta and meta.get("content"):
                 old_desc = meta.get("content").strip()
 
-            # 3. Extract Content for Context (H1 + first few paragraphs)
+            # --- Extract Content Context ---
             h1 = soup.find("h1")
             h1_text = h1.get_text(strip=True) if h1 else ""
             
             paragraphs = [p.get_text(strip=True) for p in soup.find_all("p")[:3]]
             content_snippet = f"H1: {h1_text}\nContent: {' '.join(paragraphs)}"
 
-            # 4. Generate with Gemini
+            # --- Generate with Gemini 2.5 Flash ---
             prompt = f"""
             You are an SEO Expert.
             Analyze this webpage context and current meta tags.
@@ -70,24 +79,27 @@ def generate_meta_tags(urls: list[str], api_key: str):
             1. Create a BETTER Meta Title (max 60 chars, compelling, keyword-rich).
             2. Create a BETTER Meta Description (max 160 chars, actionable, summarizes content).
 
-            Output format:
-            Title: <new_title>
-            Description: <new_description>
+            Output Requirement:
+            Return ONLY a JSON object with this exact structure:
+            {{
+                "title": "Insert new title here",
+                "description": "Insert new description here"
+            }}
             """
 
             response = model.generate_content(prompt)
-            text = response.text.strip()
             
-            # Parse output
+            # --- Parse JSON Output ---
             new_title = old_title # Fallback
             new_desc = old_desc   # Fallback
-            
-            for line in text.split('\n'):
-                if line.startswith("Title:"):
-                    new_title = line.replace("Title:", "").strip()
-                elif line.startswith("Description:"):
-                    new_desc = line.replace("Description:", "").strip()
 
+            try:
+                data = json.loads(response.text)
+                new_title = data.get("title", old_title)
+                new_desc = data.get("description", old_desc)
+            except json.JSONDecodeError:
+                print(f"JSON Error for {url}")
+            
             results.append({
                 "URL": url,
                 "Old Title": old_title,
