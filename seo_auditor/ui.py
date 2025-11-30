@@ -17,7 +17,8 @@ try:
     from .wp_handler import push_schema_to_wordpress, update_page_meta
     from .meta_gen import generate_meta_tags
     from .image_alt_updater import fetch_page_images, update_image_alts
-except ImportError:
+except ImportError as e:
+    print(f"Import Error: {e}")
     pass
 
 # ==========================================
@@ -222,7 +223,7 @@ def run_sitemap_extract(homepage_url, progress=gr.Progress()):
     
     return df, f"✅ Found {len(urls)} URLs", filename
 
-def run_image_alt_fetch(page_url, progress=gr.Progress()):
+def run_image_alt_fetch(page_url, wp_user, wp_pass, progress=gr.Progress()):
     """Fetch all images from a page and return them in a format suitable for the UI"""
     if not page_url:
         return [], "Please enter a page URL."
@@ -232,7 +233,7 @@ def run_image_alt_fetch(page_url, progress=gr.Progress()):
     
     progress(0.3, desc="🖼️ Fetching images...")
     
-    images = fetch_page_images(page_url)
+    images = fetch_page_images(page_url, wp_user, wp_pass)
     
     if not images:
         return [], "❌ No images found on this page."
@@ -596,7 +597,7 @@ def create_ui():
                             # Connect handlers
                             fetch_images_btn.click(
                                 run_image_alt_fetch,
-                                inputs=[image_page_url],
+                                inputs=[image_page_url, wp_user_input, wp_pass_input],
                                 outputs=[image_df, image_status]
                             )
                             
