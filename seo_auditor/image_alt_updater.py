@@ -1,12 +1,63 @@
 import requests
+import os
+import re
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from .utils import get_session
 
-def fetch_page_images(page_url):
+def find_attachment_id_by_url(image_url, base_url, auth):
+    """
+    Queries WordPress API to find attachment ID by image URL.
+    """
+    try:
+        # Extract filename and clean it (remove -300x200 suffix)
+        path = urlparse(image_url).path
+        filename = os.path.basename(path)
+        name_without_ext = os.path.splitext(filename)[0]
+
+        # Regex to remove dimension suffix like -300x200 or -1024x768
+        # This regex looks for a hyphen followed by digits, 'x', digits, at the end of the name
+        clean_name = re.sub(r'-\d+x\d+$', '', name_without_ext)
+
+        api_url = f"{base_url}/wp-json/wp/v2/media"
+        params = {
+            "search": clean_name,
+            "per_page": 20
+        }
+
+        resp = requests.get(api_url, params=params, auth=auth, timeout=10)
+        if resp.status_code != 200:
+            return None
+
+        media_items = resp.json()
+
+        for item in media_items:
+            # Check full size URL
+            if item.get('source_url') == image_url:
+                return item.get('id')
+
+            # Check sizes
+            if 'media_details' in item and 'sizes' in item['media_details']:
+                for size_name, size_data in item['media_details']['sizes'].items():
+                    if size_data.get('source_url') == image_url:
+                        return item.get('id')
+
+            # Fallback: check if source_url ends with the filename we have
+            # This is useful if protocol or domain differs slightly
+            source_url = item.get('source_url', '')
+            if source_url.endswith(filename):
+                return item.get('id')
+
+        return None
+    except Exception as e:
+        print(f"Error finding attachment ID: {e}")
+        return None
+
+def fetch_page_images(page_url, username=None, app_password=None):
     """
     Fetches all images from a given page URL.
     Returns a list of dicts with image info: {url, current_alt, attachment_id}
+    If username/app_password are provided, it will attempt to find missing attachment IDs via API.
     """
     session = get_session()
     
@@ -18,6 +69,14 @@ def fetch_page_images(page_url):
         soup = BeautifulSoup(resp.text, 'lxml')
         images = []
         
+        # Prepare WP API info if credentials exist
+        base_url = None
+        auth = None
+        if username and app_password:
+            parsed = urlparse(page_url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+            auth = (username, app_password)
+
         for img in soup.find_all('img'):
             img_src = img.get('src', '')
             if not img_src:
@@ -37,6 +96,17 @@ def fetch_page_images(page_url):
                         except:
                             pass
             
+            # If ID not found in class, try API if credentials provided
+            if not attachment_id and auth and base_url:
+                # Only try for local images (matching domain)
+                if base_url in img_src or img_src.startswith('/'):
+                    # Handle relative URLs
+                    full_src = img_src
+                    if img_src.startswith('/'):
+                        full_src = f"{base_url}{img_src}"
+
+                    attachment_id = find_attachment_id_by_url(full_src, base_url, auth)
+
             images.append({
                 'url': img_src,
                 'current_alt': current_alt,

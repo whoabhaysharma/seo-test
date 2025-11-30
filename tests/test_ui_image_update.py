@@ -14,7 +14,7 @@ class TestImageAltUpdate(unittest.TestCase):
         ]
 
         progress_mock = MagicMock()
-        data, message = run_image_alt_fetch('http://example.com', progress=progress_mock)
+        data, message = run_image_alt_fetch('http://example.com', "user", "pass", progress=progress_mock)
 
         self.assertEqual(len(data), 2)
         # Check first row
