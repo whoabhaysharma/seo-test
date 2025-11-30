@@ -238,14 +238,15 @@ def run_image_alt_fetch(page_url, progress=gr.Progress()):
         return [], "❌ No images found on this page."
     
     # Prepare data for display
-    # Format: [image_url, current_alt, new_alt (editable), attachment_id]
+    # Format: [preview, image_url, current_alt, new_alt (editable), attachment_id]
     image_data = []
     for img in images:
         image_data.append([
+            f"![Preview]({img['url']})",
             img['url'],
             img['current_alt'],
             img['current_alt'],  # Default new_alt to current
-            img['attachment_id'] if img['attachment_id'] else "N/A"
+            str(img['attachment_id']) if img['attachment_id'] else "N/A"
         ])
     
     return image_data, f"✅ Found {len(images)} images"
@@ -262,22 +263,51 @@ def run_image_alt_update(page_url, image_df, wp_user, wp_pass, progress=gr.Progr
     
     # Parse the dataframe to extract updates
     updates = []
-    for row in image_df:
-        attachment_id = row[3]  # 4th column
-        new_alt = row[2]  # 3rd column (new alt text)
-        
-        # Skip if no attachment ID
-        if attachment_id == "N/A" or not attachment_id:
-            continue
-        
-        try:
-            attachment_id = int(attachment_id)
-            updates.append({
-                'attachment_id': attachment_id,
-                'new_alt': new_alt
-            })
-        except:
-            continue
+
+    # Check if input is a pandas DataFrame
+    if isinstance(image_df, pd.DataFrame):
+        for index, row in image_df.iterrows():
+            # Access by column name
+            try:
+                attachment_id = row['Attachment ID']
+                new_alt = row['New Alt Text']
+            except KeyError:
+                # Fallback to indices if column names mismatch
+                # Order: Preview, URL, Current, New, ID
+                attachment_id = row.iloc[4]
+                new_alt = row.iloc[3]
+
+            # Skip if no attachment ID
+            if attachment_id == "N/A" or not attachment_id or pd.isna(attachment_id):
+                continue
+
+            try:
+                # Handle potential float conversion from pandas
+                attachment_id = int(float(attachment_id))
+                updates.append({
+                    'attachment_id': attachment_id,
+                    'new_alt': new_alt
+                })
+            except (ValueError, TypeError):
+                continue
+    else:
+        # Fallback for list of lists
+        for row in image_df:
+            try:
+                # Indices: 0:Prev, 1:URL, 2:Curr, 3:New, 4:ID
+                attachment_id = row[4]
+                new_alt = row[3]
+
+                if attachment_id == "N/A" or not attachment_id:
+                    continue
+
+                attachment_id = int(attachment_id)
+                updates.append({
+                    'attachment_id': attachment_id,
+                    'new_alt': new_alt
+                })
+            except:
+                continue
     
     if not updates:
         return "⚠️ No valid images to update (missing attachment IDs)."
@@ -545,11 +575,11 @@ def create_ui():
                             
                             # Dataframe to display images
                             image_df = gr.Dataframe(
-                                headers=["Image URL", "Current Alt", "New Alt Text", "Attachment ID"],
-                                datatype=["str", "str", "str", "str"],
+                                headers=["Preview", "Image URL", "Current Alt", "New Alt Text", "Attachment ID"],
+                                datatype=["markdown", "str", "str", "str", "str"],
                                 interactive=True,
                                 wrap=True,
-                                col_count=(4, "fixed")
+                                col_count=(5, "fixed")
                             )
                             
                             with gr.Row():
