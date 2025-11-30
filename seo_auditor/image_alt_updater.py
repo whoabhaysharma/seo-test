@@ -4,6 +4,7 @@ import re
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from .utils import get_session
+from .wp_handler import find_post_id_by_url
 
 def find_attachment_id_by_url(image_url, base_url, auth):
     """
@@ -122,6 +123,9 @@ def fetch_page_images(page_url, username=None, app_password=None):
 def update_image_alts(page_url, username, app_password, image_updates):
     """
     Updates alt text for images on a WordPress page.
+    1. Updates Media Library via API (for future usage).
+    2. Updates actual Page Content (HTML) to reflect changes immediately.
+
     image_updates: list of dicts with {attachment_id, new_alt}
     Returns success status and message.
     """
@@ -136,6 +140,8 @@ def update_image_alts(page_url, username, app_password, image_updates):
     
     results = []
     
+    # 1. Update Media Library
+    results.append("--- Media Library Updates ---")
     for update in image_updates:
         attachment_id = update.get('attachment_id')
         new_alt = update.get('new_alt', '')
@@ -155,11 +161,85 @@ def update_image_alts(page_url, username, app_password, image_updates):
             resp = requests.post(update_url, auth=auth, json=payload, headers=headers, timeout=10)
             
             if resp.status_code == 200:
-                results.append(f"✅ Updated image ID {attachment_id}")
+                results.append(f"✅ Media ID {attachment_id} updated")
             else:
-                results.append(f"❌ Failed to update ID {attachment_id}: {resp.status_code}")
+                results.append(f"❌ Failed Media ID {attachment_id}: {resp.status_code}")
         
         except Exception as e:
-            results.append(f"❌ Error updating ID {attachment_id}: {str(e)}")
-    
+            results.append(f"❌ Error Media ID {attachment_id}: {str(e)}")
+
+    # 2. Update Page Content
+    results.append("\n--- Page Content Updates ---")
+    try:
+        # Find post/page ID
+        post_id, post_type, error_msg = find_post_id_by_url(page_url, auth=auth)
+
+        if not post_id:
+            results.append(f"❌ Could not find Page/Post ID for content update: {error_msg}")
+        else:
+            # Fetch content with context=edit
+            content_url = f"{base_url}/wp-json/wp/v2/{post_type}/{post_id}?context=edit"
+            content_resp = requests.get(content_url, auth=auth, headers=headers, timeout=10)
+
+            if content_resp.status_code == 200:
+                data = content_resp.json()
+                raw_content = data.get('content', {}).get('raw', '')
+
+                # Update HTML
+                if raw_content:
+                    soup = BeautifulSoup(raw_content, 'html.parser')
+                    updates_made = 0
+
+                    for update in image_updates:
+                        attachment_id = update.get('attachment_id')
+                        new_alt = update.get('new_alt', '')
+
+                        if not attachment_id: continue
+
+                        # Find image by class wp-image-{id}
+                        img_tag = soup.find('img', class_=lambda c: c and f"wp-image-{attachment_id}" in c.split())
+
+                        # If not found by class, we could try source matching but that's riskier in raw content
+                        # as URLs might be relative or different in edit mode.
+                        # Class matching is the standard WP way.
+
+                        if img_tag:
+                            old_alt = img_tag.get('alt', '')
+                            if old_alt != new_alt:
+                                img_tag['alt'] = new_alt
+                                updates_made += 1
+                                results.append(f"✅ Updated content for image {attachment_id}")
+                            else:
+                                results.append(f"ℹ️ Content already matches for image {attachment_id}")
+                        else:
+                            results.append(f"⚠️ Image {attachment_id} not found in page content (might be in a complex block or template)")
+
+                    if updates_made > 0:
+                        # Push updated content back
+                        new_html = str(soup)
+                        # Be careful with BeautifulSoup adding <html><body> wrappers if it parsed a fragment
+                        # BS4 'html.parser' usually doesn't add html/body if input didn't have it, but let's be safe.
+                        # Actually, soup.prettify() or str(soup) might differ.
+                        # Since we parsed a fragment (the post content), str(soup) is usually fine.
+
+                        update_payload = {
+                            "content": new_html
+                        }
+
+                        push_resp = requests.post(f"{base_url}/wp-json/wp/v2/{post_type}/{post_id}", auth=auth, json=update_payload, headers=headers, timeout=10)
+
+                        if push_resp.status_code == 200:
+                            results.append(f"✅ Successfully saved page content updates.")
+                        else:
+                            results.append(f"❌ Failed to save page content: {push_resp.status_code} - {push_resp.text}")
+                    else:
+                        results.append("ℹ️ No content changes needed.")
+                else:
+                    results.append("❌ Retrieved empty content from API.")
+            else:
+                results.append(f"❌ Failed to fetch content: {content_resp.status_code}")
+
+    except Exception as e:
+        results.append(f"❌ Critical error updating page content: {str(e)}")
+
     return True, "\n".join(results)
