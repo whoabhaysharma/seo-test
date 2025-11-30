@@ -96,6 +96,10 @@ def update_page_meta(target_url, username, app_password, new_title, new_desc):
     """
     Updates the Page Title and a custom meta description field.
     """
+    # Ensure inputs are strings and clean
+    new_title = str(new_title).strip() if new_title else ""
+    new_desc = str(new_desc).strip() if new_desc else ""
+
     # 1. Parse URL to get domain and slug
     parsed = urlparse(target_url)
     base_url = f"{parsed.scheme}://{parsed.netloc}"
@@ -147,8 +151,10 @@ def update_page_meta(target_url, username, app_password, new_title, new_desc):
         meta_payload = {
             "custom_meta_description": new_desc,  # Legacy/Custom
             "_yoast_wpseo_metadesc": new_desc,    # Yoast SEO
+            "yoast_wpseo_metadesc": new_desc,     # Yoast (Unprotected variant)
             "rank_math_description": new_desc,    # RankMath
-            "_aioseop_description": new_desc      # All in One SEO
+            "_aioseop_description": new_desc,     # All in One SEO
+            "description": new_desc               # Generic
         }
 
         payload = {
@@ -159,7 +165,27 @@ def update_page_meta(target_url, username, app_password, new_title, new_desc):
         update_resp = requests.post(update_url, auth=auth, json=payload, headers=headers)
         
         if update_resp.status_code == 200:
-            return True, f"Updated ID {post_id}"
+            # 4. Verify Update
+            # The API might return 200 even if it ignored the meta keys (due to protection).
+            # We fetch the post again to verify if the meta fields were actually updated.
+            verify_resp = requests.get(update_url, auth=auth, headers=headers)
+            if verify_resp.status_code == 200:
+                updated_data = verify_resp.json()
+                updated_meta = updated_data.get("meta", {})
+
+                # Check if any of our target keys match the new description
+                meta_updated = False
+                for key in meta_payload.keys():
+                    if key in updated_meta and updated_meta[key] == new_desc:
+                        meta_updated = True
+                        break
+
+                if meta_updated:
+                    return True, f"Updated ID {post_id}"
+                else:
+                    return True, f"Updated ID {post_id}, BUT meta description might not have saved. Check WP permissions for protected meta fields (starting with _)."
+
+            return True, f"Updated ID {post_id} (Verification skipped)"
         else:
             return False, f"Failed: {update_resp.text}"
 
