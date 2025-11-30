@@ -142,11 +142,18 @@ def update_page_meta(target_url, username, app_password, new_title, new_desc):
         # 3. Update Title and Meta
         update_url = f"{base_url}/wp-json/wp/v2/{post_type}/{post_id}"
         
+        # We try to update multiple common meta fields for SEO description
+        # to support Yoast, RankMath, AIOSEO, and custom setups.
+        meta_payload = {
+            "custom_meta_description": new_desc,  # Legacy/Custom
+            "_yoast_wpseo_metadesc": new_desc,    # Yoast SEO
+            "rank_math_description": new_desc,    # RankMath
+            "_aioseop_description": new_desc      # All in One SEO
+        }
+
         payload = {
             "title": new_title,
-            "meta": {
-                "custom_meta_description": new_desc
-            }
+            "meta": meta_payload
         }
 
         update_resp = requests.post(update_url, auth=auth, json=payload, headers=headers)
