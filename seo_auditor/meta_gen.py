@@ -4,23 +4,28 @@ import re
 import json
 from .utils import get_session
 
+def clean_json_text(text: str) -> str:
+    """
+    Cleans the AI response to ensure it's valid JSON.
+    Removes markdown code blocks (```json ... ```) and leading/trailing whitespace.
+    """
+    text = text.strip()
+    # Remove markdown code blocks if present
+    if "```" in text:
+        text = re.sub(r"^```(json)?|```$", "", text, flags=re.MULTILINE).strip()
+    return text
+
 def generate_meta_tags(urls: list[str], api_key: str):
-    """
-    Analyzes a list of URLs and generates improved Meta Titles and Descriptions.
-    Returns a list of dictionaries for a DataFrame.
-    """
     if not api_key:
         return []
 
     genai.configure(api_key=api_key)
     
-    # 1. Configure for JSON Mode
-    # This forces the model to output valid JSON, preventing parsing errors
+    # Use JSON mode for structure
     generation_config = {
         "response_mime_type": "application/json",
     }
     
-    # 2. Use the requested Gemini 2.5 Flash model
     model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config)
     session = get_session()
 
@@ -34,38 +39,40 @@ def generate_meta_tags(urls: list[str], api_key: str):
             url = "https://" + url
 
         try:
-            # --- Fetch Page Content ---
+            # 1. Fetch Page Content
             resp = session.get(url, timeout=10)
             if resp.status_code >= 400:
-                results.append({
-                    "URL": url,
-                    "Old Title": "Error fetching",
-                    "New Title": "",
-                    "Old Desc": "Error fetching",
-                    "New Desc": ""
-                })
+                results.append({"URL": url, "New Title": "Error", "New Desc": "Error"})
                 continue
 
             soup = BeautifulSoup(resp.text, "lxml")
 
-            # --- Extract Current Metadata ---
-            old_title = ""
-            if soup.title and soup.title.string:
-                old_title = soup.title.string.strip()
+            # 2. Extract Current Metadata (Robust Scraping)
+            old_title = soup.title.string.strip() if (soup.title and soup.title.string) else ""
 
             old_desc = ""
+            # Look for standard description OR og:description as backup
             meta = soup.find("meta", attrs={"name": re.compile("description", re.I)})
+            if not meta:
+                meta = soup.find("meta", attrs={"property": re.compile("og:description", re.I)})
+            
             if meta and meta.get("content"):
                 old_desc = meta.get("content").strip()
 
-            # --- Extract Content Context ---
+            # 3. Extract Context (Enhanced for Gallery Pages)
+            # Since your example is a gallery, it might not have many <p> tags.
+            # We add H2s and Image Alts to give the AI more context.
             h1 = soup.find("h1")
             h1_text = h1.get_text(strip=True) if h1 else ""
             
-            paragraphs = [p.get_text(strip=True) for p in soup.find_all("p")[:3]]
-            content_snippet = f"H1: {h1_text}\nContent: {' '.join(paragraphs)}"
+            paragraphs = [p.get_text(strip=True) for p in soup.find_all("p")[:5]]
+            
+            # Also grab some image alt text if paragraphs are scarce (helpful for galleries)
+            images = [img.get('alt', '') for img in soup.find_all('img', alt=True)[:5]]
+            
+            content_snippet = f"H1: {h1_text}\nContent: {' '.join(paragraphs)}\nImages: {' '.join(images)}"
 
-            # --- Generate with Gemini 2.5 Flash ---
+            # 4. Generate
             prompt = f"""
             You are an SEO Expert.
             Analyze this webpage context and current meta tags.
@@ -79,27 +86,39 @@ def generate_meta_tags(urls: list[str], api_key: str):
             1. Create a BETTER Meta Title (max 60 chars, compelling, keyword-rich).
             2. Create a BETTER Meta Description (max 160 chars, actionable, summarizes content).
 
-            Output Requirement:
-            Return ONLY a JSON object with this exact structure:
+            IMPORTANT: Return raw JSON only. No markdown formatting.
+            Structure:
             {{
-                "title": "Insert new title here",
-                "description": "Insert new description here"
+                "title": "New Title Here",
+                "description": "New Description Here"
             }}
             """
 
             response = model.generate_content(prompt)
             
-            # --- Parse JSON Output ---
-            new_title = old_title # Fallback
-            new_desc = old_desc   # Fallback
+            # 5. Parse Safely
+            cleaned_text = clean_json_text(response.text)
+            
+            new_title = old_title
+            new_desc = old_desc
 
             try:
-                data = json.loads(response.text)
+                data = json.loads(cleaned_text)
                 new_title = data.get("title", old_title)
                 new_desc = data.get("description", old_desc)
-            except json.JSONDecodeError:
-                print(f"JSON Error for {url}")
-            
+                
+                # Double check: if AI returns empty string, keep old
+                if not new_title: new_title = old_title
+                if not new_desc: new_desc = old_desc
+
+            except json.JSONDecodeError as e:
+                print(f"JSON Error for {url}: {e}")
+                # Fallback: Try regex if JSON fails
+                title_match = re.search(r'"title":\s*"(.*?)"', cleaned_text)
+                desc_match = re.search(r'"description":\s*"(.*?)"', cleaned_text)
+                if title_match: new_title = title_match.group(1)
+                if desc_match: new_desc = desc_match.group(1)
+
             results.append({
                 "URL": url,
                 "Old Title": old_title,
@@ -109,10 +128,11 @@ def generate_meta_tags(urls: list[str], api_key: str):
             })
 
         except Exception as e:
+            print(f"Error processing {url}: {e}")
             results.append({
                 "URL": url,
                 "Old Title": "Error",
-                "New Title": str(e),
+                "New Title": "",
                 "Old Desc": "Error",
                 "New Desc": ""
             })
