@@ -148,7 +148,13 @@ def update_page_meta(target_url, username, app_password, new_title, new_desc):
             "custom_meta_description": new_desc,  # Legacy/Custom
             "_yoast_wpseo_metadesc": new_desc,    # Yoast SEO
             "rank_math_description": new_desc,    # RankMath
-            "_aioseop_description": new_desc      # All in One SEO
+            "_aioseop_description": new_desc,     # All in One SEO
+
+            # SEO Titles
+            "custom_meta_title": new_title,       # Custom fallback
+            "_yoast_wpseo_title": new_title,      # Yoast SEO Title
+            "rank_math_title": new_title,         # RankMath Title
+            "_aioseop_title": new_title           # All in One SEO Title
         }
 
         payload = {
