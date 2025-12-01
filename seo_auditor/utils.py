@@ -5,6 +5,10 @@ from .config import USER_AGENT
 def get_session():
     """Returns a configured requests Session."""
     session = requests.Session()
+    # Increase connection pool size to handle concurrency
+    adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
     session.headers.update({"User-Agent": USER_AGENT})
     return session
 
