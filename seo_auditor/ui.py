@@ -88,7 +88,7 @@ def run_audit_ui(urls_input, max_pages, progress=gr.Progress()):
     
     return df_display, filename, f"✅ Audit Complete. Scanned {len(urls_to_scan)} pages."
 
-async def run_capture_ui(urls_input, progress=gr.Progress()):
+def run_capture_ui(urls_input, progress=gr.Progress(track_tqdm=True)):
     if not urls_input:
         return None, None, "Please enter URL(s)."
     
@@ -99,8 +99,8 @@ async def run_capture_ui(urls_input, progress=gr.Progress()):
         
     progress(0.1, desc=f"📸 Initializing capture for {len(urls_list)} page(s)...")
 
-    # Run async capture - returns (folder_path, screenshot_paths)
-    folder_path, screenshot_paths = await capture_screenshots(urls_list, progress=progress)
+    # Run async capture in event loop - returns (folder_path, screenshot_paths)
+    folder_path, screenshot_paths = asyncio.run(capture_screenshots(urls_list, progress=progress))
     
     if not screenshot_paths:
         return None, None, "❌ Failed to capture screenshots."

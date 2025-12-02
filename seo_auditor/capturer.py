@@ -107,14 +107,22 @@ async def capture_screenshots(urls: list[str], progress=None, output_folder: str
         tasks = [capture_task(i, url) for i, url in enumerate(urls)]
 
         results = []
-        if progress:
-            # Manually tracking progress
-            for f in asyncio.as_completed(tasks):
-                res = await f
-                results.append(res)
-                progress(len(results) / len(urls), desc=f"Captured {len(results)}/{len(urls)}")
-        else:
-            results = await asyncio.gather(*tasks)
+        completed_count = 0
+        total_count = len(urls)
+        
+        # Process tasks as they complete
+        for f in asyncio.as_completed(tasks):
+            res = await f
+            results.append(res)
+            completed_count += 1
+            
+            # Update progress if callback provided
+            if progress:
+                try:
+                    progress(completed_count / total_count, desc=f"📸 Captured {completed_count}/{total_count}")
+                except Exception as e:
+                    # Progress callback might fail in some contexts, just log and continue
+                    print(f"Progress update: {completed_count}/{total_count}")
 
         await browser.close()
 
