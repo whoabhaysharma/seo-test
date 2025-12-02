@@ -95,8 +95,8 @@ async def capture_screenshots(urls: list[str], progress=None, output_folder: str
                     # Save with sequential number (1-indexed for user friendliness)
                     filename = f"{idx + 1}.png"
                     filepath = os.path.join(output_folder, filename)
-                    # OPTIMIZATION: Use quality=75 to reduce file size by ~40%, slightly faster I/O
-                    await page.screenshot(path=filepath, full_page=True, quality=75)
+                    # Note: quality option is not supported for PNG, only for JPEG
+                    await page.screenshot(path=filepath, full_page=True)
                     await page.close()
                     print(f"Saved: {filename} <- {url}")
                     return (idx, filepath)
