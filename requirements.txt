@@ -10,3 +10,4 @@ openpyxl
 playwright
 pillow
 google-generativeai
+aiohttp

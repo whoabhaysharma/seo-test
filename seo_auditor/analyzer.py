@@ -1,5 +1,7 @@
 import time
 import re
+import asyncio
+import aiohttp
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 import textstat
@@ -9,6 +11,23 @@ from .config import TIMEOUT, MAX_BROKEN_LINK_CHECKS
 from .utils import get_session, get_schema_types
 
 session = get_session()
+
+async def fetch_page_async(url, session_obj=None):
+    """Async fetch a page using aiohttp for true concurrent loading."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as session_async:
+            async with session_async.get(url, ssl=False, allow_redirects=True) as resp:
+                return url, resp.status, await resp.read(), resp.headers
+    except asyncio.TimeoutError:
+        return url, 0, None, {}
+    except Exception as e:
+        return url, 0, None, {}
+
+async def fetch_pages_async(urls):
+    """Fetch multiple pages concurrently using async."""
+    tasks = [fetch_page_async(url) for url in urls]
+    return await asyncio.gather(*tasks)
 
 def check_link_status(url):
     """Checks the status of a single link."""
@@ -135,8 +154,8 @@ def analyze_page(url, domain_netloc):
     # Convert to list and slice
     links_to_test = list(internal_urls_to_check)[:MAX_BROKEN_LINK_CHECKS]
 
-    # Concurrent broken link checking
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    # Concurrent broken link checking with increased workers
+    with ThreadPoolExecutor(max_workers=20) as executor:
         future_to_url = {executor.submit(check_link_status, link): link for link in links_to_test}
         for future in as_completed(future_to_url):
             is_broken = future.result()

@@ -2,6 +2,7 @@ import gradio as gr
 import pandas as pd
 import time
 import json
+import asyncio
 from urllib.parse import urlparse, urljoin
 
 # ==========================================
@@ -10,7 +11,7 @@ from urllib.parse import urlparse, urljoin
 try:
     from .config import MAX_PAGES_TO_SCAN
     from .crawler import check_robots_txt, fetch_sitemap_urls
-    from .analyzer import analyze_page
+    from .analyzer import analyze_page, fetch_pages_async
     from .reporter import prepare_dataframe, save_excel
     from .capturer import capture_screenshots, create_pdf
     from .schema_gen import generate_improved_schema
@@ -54,11 +55,12 @@ def run_audit_ui(urls_input, max_pages, progress=gr.Progress()):
         
     results = []
 
-    # Use ThreadPoolExecutor for concurrent page analysis
+    # Use ThreadPoolExecutor with INCREASED concurrency
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # Limit max workers to avoid overwhelming the server or local machine
-    max_workers = min(10, len(urls_to_scan)) if len(urls_to_scan) > 0 else 1
+    # Massively increased workers since HTTP I/O is non-blocking
+    # Can handle 100+ concurrent requests depending on target server
+    max_workers = min(100, len(urls_to_scan)) if len(urls_to_scan) > 0 else 1
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_url = {executor.submit(analyze_page, url, domain_netloc): url for url in urls_to_scan}
@@ -75,8 +77,6 @@ def run_audit_ui(urls_input, max_pages, progress=gr.Progress()):
                 results.append(res)
             except Exception as e:
                 print(f"Error analyzing {url}: {e}")
-                # Append a dummy error result so we don't lose track?
-                # Or just skip. For now, let's skip but maybe log it.
                 pass
         
     df = pd.DataFrame(results)
