@@ -2,7 +2,8 @@ import os
 import tempfile
 import subprocess
 import sys
-from playwright.sync_api import sync_playwright, Error as PlaywrightError
+import asyncio
+from playwright.async_api import async_playwright, Error as PlaywrightError
 from PIL import Image
 
 def _install_browsers():
@@ -33,19 +34,17 @@ def _install_deps():
         print(f"Failed to install dependencies: {e}")
         return False
 
-def capture_screenshots(urls: list[str], progress=None) -> list[str]:
+async def capture_screenshots(urls: list[str], progress=None) -> list[str]:
     """
-    Captures full-page screenshots for a list of URLs.
+    Captures full-page screenshots for a list of URLs concurrently.
     Returns a list of file paths to the screenshots.
     """
-    screenshot_paths = []
-
-    # Common args for running in containers/sandbox environments
     launch_args = ["--no-sandbox", "--disable-setuid-sandbox"]
 
-    with sync_playwright() as p:
+    async with async_playwright() as p:
+        browser = None
         try:
-            browser = p.chromium.launch(args=launch_args)
+            browser = await p.chromium.launch(args=launch_args)
         except PlaywrightError as e:
             error_str = str(e)
             installed = False
@@ -58,41 +57,52 @@ def capture_screenshots(urls: list[str], progress=None) -> list[str]:
 
             if installed:
                 try:
-                    browser = p.chromium.launch(args=launch_args)
+                    browser = await p.chromium.launch(args=launch_args)
                 except PlaywrightError as e2:
                     print(f"Failed to launch browser after installation attempts: {e2}")
                     return []
             else:
-                print(f"Browser launch failed and auto-installation was not successful or applicable: {e}")
+                print(f"Browser launch failed: {e}")
                 return []
 
-        context = browser.new_context(viewport={"width": 1280, "height": 1024})
+        context = await browser.new_context(viewport={"width": 1280, "height": 1024})
+        sem = asyncio.Semaphore(5)
 
-        for i, url in enumerate(urls):
-            if progress:
-                progress((i + 1) / len(urls), desc=f"Capturing: {url}")
-            try:
-                page = context.new_page()
-                # wait_until="domcontentloaded" is faster, but "networkidle" is safer for full rendering.
-                # Using domcontentloaded + a small sleep or just networkidle if speed isn't critical.
-                page.goto(url, timeout=30000, wait_until="networkidle")
+        async def capture_task(idx, url):
+            async with sem:
+                try:
+                    page = await context.new_page()
+                    await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                    temp_dir = tempfile.gettempdir()
+                    safe_name = "".join([c if c.isalnum() else "_" for c in url])[-50:]
+                    filename = f"screenshot_{idx}_{safe_name}.png"
+                    filepath = os.path.join(temp_dir, filename)
+                    await page.screenshot(path=filepath, full_page=True)
+                    await page.close()
+                    return (idx, filepath)
+                except Exception as e:
+                    print(f"Failed to capture {url}: {e}")
+                    return (idx, None)
 
-                # Create a temp file path
-                temp_dir = tempfile.gettempdir()
-                # sanitize url for filename
-                safe_name = "".join([c if c.isalnum() else "_" for c in url])[-50:]
-                filename = f"screenshot_{i}_{safe_name}.png"
-                filepath = os.path.join(temp_dir, filename)
+        tasks = [capture_task(i, url) for i, url in enumerate(urls)]
 
-                page.screenshot(path=filepath, full_page=True)
-                screenshot_paths.append(filepath)
-                page.close()
-            except Exception as e:
-                print(f"Failed to capture {url}: {e}")
+        results = []
+        if progress:
+            # Manually tracking progress
+            for f in asyncio.as_completed(tasks):
+                res = await f
+                results.append(res)
+                progress(len(results) / len(urls), desc=f"Captured {len(results)}/{len(urls)}")
+        else:
+            results = await asyncio.gather(*tasks)
 
-        browser.close()
+        await browser.close()
 
-    return screenshot_paths
+    # Sort results by index to maintain original URL order
+    results.sort(key=lambda x: x[0])
+
+    # Filter out None and return only paths
+    return [path for idx, path in results if path]
 
 def create_pdf(image_paths: list[str], output_filename: str) -> str:
     """

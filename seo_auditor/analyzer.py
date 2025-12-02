@@ -3,11 +3,20 @@ import re
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 import textstat
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .config import TIMEOUT, MAX_BROKEN_LINK_CHECKS
 from .utils import get_session, get_schema_types
 
 session = get_session()
+
+def check_link_status(url):
+    """Checks the status of a single link."""
+    try:
+        resp = session.head(url, timeout=5)
+        return resp.status_code >= 400
+    except:
+        return True
 
 def analyze_page(url, domain_netloc):
     result = {
@@ -126,14 +135,13 @@ def analyze_page(url, domain_netloc):
     # Convert to list and slice
     links_to_test = list(internal_urls_to_check)[:MAX_BROKEN_LINK_CHECKS]
 
-    for link in links_to_test:
-        try:
-            # use head request to be faster
-            resp = session.head(link, timeout=5)
-            if resp.status_code >= 400:
+    # Concurrent broken link checking
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_url = {executor.submit(check_link_status, link): link for link in links_to_test}
+        for future in as_completed(future_to_url):
+            is_broken = future.result()
+            if is_broken:
                 broken_count += 1
-        except:
-            broken_count += 1
 
     result["broken_links"] = broken_count
 

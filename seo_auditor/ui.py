@@ -53,10 +53,31 @@ def run_audit_ui(urls_input, max_pages, progress=gr.Progress()):
         urls_to_scan = urls_to_scan[:int(max_pages)]
         
     results = []
-    for i, url in enumerate(urls_to_scan):
-        progress((i + 1) / len(urls_to_scan), desc=f"Analyzing {url}")
-        res = analyze_page(url, domain_netloc)
-        results.append(res)
+
+    # Use ThreadPoolExecutor for concurrent page analysis
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Limit max workers to avoid overwhelming the server or local machine
+    max_workers = min(10, len(urls_to_scan)) if len(urls_to_scan) > 0 else 1
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_url = {executor.submit(analyze_page, url, domain_netloc): url for url in urls_to_scan}
+
+        completed_count = 0
+        total_urls = len(urls_to_scan)
+
+        for future in as_completed(future_to_url):
+            completed_count += 1
+            url = future_to_url[future]
+            progress(completed_count / total_urls, desc=f"Analyzed {url}")
+            try:
+                res = future.result()
+                results.append(res)
+            except Exception as e:
+                print(f"Error analyzing {url}: {e}")
+                # Append a dummy error result so we don't lose track?
+                # Or just skip. For now, let's skip but maybe log it.
+                pass
         
     df = pd.DataFrame(results)
     df_display = prepare_dataframe(df)
@@ -67,7 +88,7 @@ def run_audit_ui(urls_input, max_pages, progress=gr.Progress()):
     
     return df_display, filename, f"✅ Audit Complete. Scanned {len(urls_to_scan)} pages."
 
-def run_capture_ui(urls_input, progress=gr.Progress()):
+async def run_capture_ui(urls_input, progress=gr.Progress()):
     if not urls_input:
         return None, None, "Please enter URL(s)."
     
@@ -76,14 +97,19 @@ def run_capture_ui(urls_input, progress=gr.Progress()):
         if not url.startswith("http"):
             urls_list[i] = "https://" + url
         
-    progress(0.2, desc=f"📸 Capturing {len(urls_list)} page(s)...")
-    screenshot_paths = capture_screenshots(urls_list, progress=progress)
+    progress(0.1, desc=f"📸 Initializing capture for {len(urls_list)} page(s)...")
+
+    # Run async capture
+    screenshot_paths = await capture_screenshots(urls_list, progress=progress)
     
     if not screenshot_paths:
         return None, None, "❌ Failed to capture screenshots."
         
-    progress(0.8, desc="📄 Generating PDF...")
+    progress(0.9, desc="📄 Generating PDF...")
     pdf_filename = f"capture_{int(time.time())}.pdf"
+
+    # Run synchronous PDF generation in a separate thread if needed, but it's CPU bound and usually fast enough.
+    # We can just call it directly.
     pdf_path = create_pdf(screenshot_paths, pdf_filename)
     
     return screenshot_paths, pdf_path, f"✅ Capture Complete. {len(screenshot_paths)} page(s) captured."
