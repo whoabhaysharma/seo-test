@@ -13,7 +13,7 @@ try:
     from .crawler import check_robots_txt, fetch_sitemap_urls
     from .analyzer import analyze_page, fetch_pages_async
     from .reporter import prepare_dataframe, save_excel
-    from .capturer import capture_screenshots, create_pdf
+    from .capturer import capture_screenshots, create_zip, create_pdf
     from .schema_gen import generate_improved_schema
     from .wp_handler import push_schema_to_wordpress, update_page_meta
     from .meta_gen import generate_meta_tags
@@ -99,20 +99,19 @@ async def run_capture_ui(urls_input, progress=gr.Progress()):
         
     progress(0.1, desc=f"📸 Initializing capture for {len(urls_list)} page(s)...")
 
-    # Run async capture
-    screenshot_paths = await capture_screenshots(urls_list, progress=progress)
+    # Run async capture - returns (folder_path, screenshot_paths)
+    folder_path, screenshot_paths = await capture_screenshots(urls_list, progress=progress)
     
     if not screenshot_paths:
         return None, None, "❌ Failed to capture screenshots."
         
-    progress(0.9, desc="📄 Generating PDF...")
-    pdf_filename = f"capture_{int(time.time())}.pdf"
+    progress(0.9, desc="📦 Creating ZIP archive...")
+    zip_filename = f"screenshots_{int(time.time())}.zip"
 
-    # Run synchronous PDF generation in a separate thread if needed, but it's CPU bound and usually fast enough.
-    # We can just call it directly.
-    pdf_path = create_pdf(screenshot_paths, pdf_filename)
+    # Create ZIP from the folder
+    zip_path = create_zip(folder_path, zip_filename)
     
-    return screenshot_paths, pdf_path, f"✅ Capture Complete. {len(screenshot_paths)} page(s) captured."
+    return screenshot_paths, zip_path, f"✅ Capture Complete. {len(screenshot_paths)} page(s) captured and zipped."
 
 def run_schema_update(urls_input, api_key, progress=gr.Progress()):
     if not urls_input:

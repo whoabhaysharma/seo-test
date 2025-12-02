@@ -3,6 +3,8 @@ import tempfile
 import subprocess
 import sys
 import asyncio
+import zipfile
+import shutil
 from playwright.async_api import async_playwright, Error as PlaywrightError
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
@@ -36,14 +38,23 @@ def _install_deps():
         print(f"Failed to install dependencies: {e}")
         return False
 
-async def capture_screenshots(urls: list[str], progress=None) -> list[str]:
+async def capture_screenshots(urls: list[str], progress=None, output_folder: str = None) -> tuple[str, list[str]]:
     """
     Captures full-page screenshots for a list of URLs concurrently.
     OPTIMIZED: 
     - Increased concurrency from 5 to 20 simultaneous captures
-    - Returns list of file paths to the screenshots.
+    - Saves images sequentially numbered (1.png, 2.png, etc.) in a folder
+    - Returns tuple of (folder_path, list of file paths to the screenshots)
     """
     launch_args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+    
+    # Create output folder
+    if output_folder is None:
+        import time
+        timestamp = int(time.time())
+        output_folder = os.path.join(tempfile.gettempdir(), f"screenshots_{timestamp}")
+    
+    os.makedirs(output_folder, exist_ok=True)
 
     async with async_playwright() as p:
         browser = None
@@ -64,10 +75,10 @@ async def capture_screenshots(urls: list[str], progress=None) -> list[str]:
                     browser = await p.chromium.launch(args=launch_args)
                 except PlaywrightError as e2:
                     print(f"Failed to launch browser after installation attempts: {e2}")
-                    return []
+                    return (output_folder, [])
             else:
                 print(f"Browser launch failed: {e}")
-                return []
+                return (output_folder, [])
 
         context = await browser.new_context(viewport={"width": 1280, "height": 1024})
         
@@ -81,13 +92,13 @@ async def capture_screenshots(urls: list[str], progress=None) -> list[str]:
                     page = await context.new_page()
                     # Faster loading: don't wait for networkidle
                     await page.goto(url, timeout=30000, wait_until="domcontentloaded")
-                    temp_dir = tempfile.gettempdir()
-                    safe_name = "".join([c if c.isalnum() else "_" for c in url])[-50:]
-                    filename = f"screenshot_{idx}_{safe_name}.png"
-                    filepath = os.path.join(temp_dir, filename)
+                    # Save with sequential number (1-indexed for user friendliness)
+                    filename = f"{idx + 1}.png"
+                    filepath = os.path.join(output_folder, filename)
                     # OPTIMIZATION: Use quality=75 to reduce file size by ~40%, slightly faster I/O
                     await page.screenshot(path=filepath, full_page=True, quality=75)
                     await page.close()
+                    print(f"Saved: {filename} <- {url}")
                     return (idx, filepath)
                 except Exception as e:
                     print(f"Failed to capture {url}: {e}")
@@ -111,7 +122,8 @@ async def capture_screenshots(urls: list[str], progress=None) -> list[str]:
     results.sort(key=lambda x: x[0])
 
     # Filter out None and return only paths
-    return [path for idx, path in results if path]
+    screenshot_paths = [path for idx, path in results if path]
+    return (output_folder, screenshot_paths)
 
 def _compress_image(path):
     """
@@ -141,8 +153,58 @@ def _compress_image(path):
         print(f"Failed to compress image {path}: {e}")
         return None
 
+def create_zip(folder_path: str, output_filename: str = None) -> str:
+    """
+    Creates a ZIP archive from a folder containing screenshots.
+    
+    Args:
+        folder_path: Path to the folder containing images
+        output_filename: Output zip filename (optional, auto-generated if not provided)
+    
+    Returns:
+        Path to the created zip file, or None if failed
+    """
+    if not folder_path or not os.path.exists(folder_path):
+        print(f"Folder not found: {folder_path}")
+        return None
+    
+    # Get list of image files in the folder
+    image_files = sorted(
+        [f for f in os.listdir(folder_path) if f.endswith('.png')],
+        key=lambda x: int(x.replace('.png', '')) if x.replace('.png', '').isdigit() else 0
+    )
+    
+    if not image_files:
+        print("No images found in folder")
+        return None
+    
+    # Generate output filename if not provided
+    if output_filename is None:
+        import time
+        output_filename = f"screenshots_{int(time.time())}.zip"
+    
+    try:
+        with zipfile.ZipFile(output_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for img_file in image_files:
+                img_path = os.path.join(folder_path, img_file)
+                zipf.write(img_path, img_file)  # Store with just filename, not full path
+        
+        # Log file size
+        file_size_mb = os.path.getsize(output_filename) / (1024 * 1024)
+        print(f"ZIP created: {output_filename} ({file_size_mb:.2f} MB) with {len(image_files)} images")
+        
+        return output_filename
+        
+    except Exception as e:
+        print(f"ZIP creation error: {e}")
+        return None
+
+
 def create_pdf(image_paths: list[str], output_filename: str) -> str:
     """
+    DEPRECATED: Use create_zip instead.
+    Kept for backward compatibility.
+    
     OPTIMIZED: Creates a PDF from image paths using:
     - Parallel image compression (ThreadPoolExecutor)
     - Memory-efficient streaming
