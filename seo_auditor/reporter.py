@@ -12,7 +12,8 @@ def prepare_dataframe(df):
         "title", "title_len",
         "h1_text", "h1_count",
         "meta_description", "meta_description_len",
-        "word_count", "internal_links", "external_links", "broken_links", # Added broken_links
+        "word_count", "internal_links", "external_links",
+        "internal_broken_links", "external_broken_links",
         "load_time_s", "issues_found"
     ]
     all_cols = list(df.columns)
@@ -46,8 +47,12 @@ def save_excel(df, filename):
         idx = df.columns.get_loc("https_ok")
         ws.conditional_format(1, idx, len(df), idx, {'type': 'cell', 'criteria': '=', 'value': False, 'format': bad})
 
-    if "broken_links" in df.columns:
-        idx = df.columns.get_loc("broken_links")
+    if "internal_broken_links" in df.columns:
+        idx = df.columns.get_loc("internal_broken_links")
+        ws.conditional_format(1, idx, len(df), idx, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': bad})
+
+    if "external_broken_links" in df.columns:
+        idx = df.columns.get_loc("external_broken_links")
         ws.conditional_format(1, idx, len(df), idx, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': bad})
 
     writer.close()

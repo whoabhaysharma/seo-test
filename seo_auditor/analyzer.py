@@ -59,7 +59,8 @@ def analyze_page(url, domain_netloc):
         "canonical": "",
         "internal_links": 0,
         "external_links": 0,
-        "broken_links": 0,  # Added this
+        "internal_broken_links": 0,
+        "external_broken_links": 0,
         "load_time_s": 0.0,
 
         # --- FLAGS ---
@@ -134,10 +135,11 @@ def analyze_page(url, domain_netloc):
 
     # Links & Broken Link Check
     internal_urls_to_check = set()
+    external_urls_to_check = set()
 
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        if href.startswith(("javascript:", "mailto:", "tel:", "#")):
+        if href.startswith(("javascript:", "mailto:", "tel:", "sms:", "#")):
             continue
 
         full_href = urljoin(url, href)
@@ -148,21 +150,34 @@ def analyze_page(url, domain_netloc):
             internal_urls_to_check.add(full_href)
         else:
             result["external_links"] += 1
+            external_urls_to_check.add(full_href)
 
-    # Check a subset of internal links for 404s
-    broken_count = 0
-    # Convert to list and slice
-    links_to_test = list(internal_urls_to_check)[:MAX_BROKEN_LINK_CHECKS]
+    # Check a subset of links for 404s
+    internal_to_test = list(internal_urls_to_check)[:MAX_BROKEN_LINK_CHECKS]
+    external_to_test = list(external_urls_to_check)[:MAX_BROKEN_LINK_CHECKS]
+
+    all_links_to_test = internal_to_test + external_to_test
+
+    internal_broken_count = 0
+    external_broken_count = 0
 
     # Concurrent broken link checking with increased workers
     with ThreadPoolExecutor(max_workers=20) as executor:
-        future_to_url = {executor.submit(check_link_status, link): link for link in links_to_test}
+        future_to_url = {executor.submit(check_link_status, link): link for link in all_links_to_test}
         for future in as_completed(future_to_url):
+            url_checked = future_to_url[future]
             is_broken = future.result()
-            if is_broken:
-                broken_count += 1
 
-    result["broken_links"] = broken_count
+            if is_broken:
+                # Determine if internal or external
+                p_href = urlparse(url_checked)
+                if p_href.netloc == domain_netloc:
+                    internal_broken_count += 1
+                else:
+                    external_broken_count += 1
+
+    result["internal_broken_links"] = internal_broken_count
+    result["external_broken_links"] = external_broken_count
 
     # --- ISSUES LIST ---
     issues = result["issues_found"]
@@ -175,6 +190,10 @@ def analyze_page(url, domain_netloc):
     elif result["h1_count"] > 1: issues.append("Multiple H1s")
     if result["h1_equals_title"]: issues.append("Title == H1")
     if result["missing_alt_count"] > 0: issues.append(f"{result['missing_alt_count']} Images missing Alt")
-    if result["broken_links"] > 0: issues.append(f"{result['broken_links']} Broken Links")
+
+    if result["internal_broken_links"] > 0:
+        issues.append(f"{result['internal_broken_links']} Internal Broken Links")
+    if result["external_broken_links"] > 0:
+        issues.append(f"{result['external_broken_links']} External Broken Links")
 
     return result
