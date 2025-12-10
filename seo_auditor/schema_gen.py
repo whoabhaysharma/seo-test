@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import google.generativeai as genai
 from PIL import Image
 from bs4 import BeautifulSoup
@@ -33,7 +34,10 @@ def generate_improved_schema(url: str, api_key: str):
 
     # 2. Capture Screenshot
     try:
-        screenshot_paths = capture_screenshots([url])
+        # capture_screenshots is async and returns (folder_path, list_of_image_paths)
+        # We need to run it synchronously here
+        _, screenshot_paths = asyncio.run(capture_screenshots([url]))
+
         if not screenshot_paths:
             return old_schema, "Error: Failed to capture screenshot.", 0, 0, ""
 
