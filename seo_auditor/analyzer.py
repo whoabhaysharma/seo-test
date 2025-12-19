@@ -193,7 +193,5 @@ def analyze_page(url, domain_netloc):
 
     if result["internal_broken_links"] > 0:
         issues.append(f"{result['internal_broken_links']} Internal Broken Links")
-    if result["external_broken_links"] > 0:
-        issues.append(f"{result['external_broken_links']} External Broken Links")
 
     return result
