@@ -82,16 +82,17 @@ async def capture_screenshots(urls: list[str], progress=None, output_folder: str
 
         context = await browser.new_context(viewport={"width": 1280, "height": 1024})
         
-        # OPTIMIZATION: Increased from 5 to 20 concurrent captures
-        # This means 20 pages can be captured in parallel instead of 5
-        sem = asyncio.Semaphore(20)
+        # OPTIMIZATION: Adjusted concurrency for stability
+        # Reduced from 20 to 5 to prevent resource exhaustion on smaller instances
+        sem = asyncio.Semaphore(5)
 
         async def capture_task(idx, url):
             async with sem:
                 try:
+                    print(f"Starting capture for: {url}")
                     page = await context.new_page()
                     # Faster loading: don't wait for networkidle
-                    await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                    await page.goto(url, timeout=45000, wait_until="domcontentloaded")
                     # Save with sequential number (1-indexed for user friendliness)
                     filename = f"{idx + 1}.png"
                     filepath = os.path.join(output_folder, filename)
@@ -101,7 +102,7 @@ async def capture_screenshots(urls: list[str], progress=None, output_folder: str
                     print(f"Saved: {filename} <- {url}")
                     return (idx, filepath)
                 except Exception as e:
-                    print(f"Failed to capture {url}: {e}")
+                    print(f"ERROR: Failed to capture {url}. Exception: {type(e).__name__}: {e}")
                     return (idx, None)
 
         tasks = [capture_task(i, url) for i, url in enumerate(urls)]
@@ -222,17 +223,23 @@ def create_pdf(image_paths: list[str], output_filename: str) -> str:
     Speedup: 3-5x faster than original + 60% smaller file size
     """
     if not image_paths:
+        print("Error: No image paths provided for PDF creation.")
         return None
 
     try:
         # OPTIMIZATION 1: Parallel image compression using ThreadPoolExecutor
-        # Instead of loading images sequentially, load 10 in parallel
+        # Instead of loading images sequentially, load 5 in parallel to be safe
         images = []
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            compressed = list(executor.map(_compress_image, image_paths))
-            images = [img for img in compressed if img is not None]
+        try:
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                compressed = list(executor.map(_compress_image, image_paths))
+                images = [img for img in compressed if img is not None]
+        except Exception as e:
+            print(f"Error during parallel image compression: {e}")
+            return None
 
         if not images:
+            print("Error: No valid images processed for PDF.")
             return None
 
         # OPTIMIZATION 2: Use JPEG format for PDF to reduce size by 40-50%
@@ -247,6 +254,7 @@ def create_pdf(image_paths: list[str], output_filename: str) -> str:
                 print(f"Failed to convert image to JPEG: {e}")
 
         if not jpeg_images:
+            print("Error: failed to convert any images to JPEG.")
             return None
 
         # OPTIMIZATION 3: Create PDF with compression enabled
