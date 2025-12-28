@@ -105,13 +105,13 @@ def run_capture_ui(urls_input, progress=gr.Progress(track_tqdm=True)):
     if not screenshot_paths:
         return None, None, "❌ Failed to capture screenshots."
         
-    progress(0.9, desc="📦 Creating ZIP archive...")
-    zip_filename = f"screenshots_{int(time.time())}.zip"
+    progress(0.9, desc="📄 Creating PDF...")
+    pdf_filename = f"screenshots_{int(time.time())}.pdf"
 
-    # Create ZIP from the folder
-    zip_path = create_zip(folder_path, zip_filename)
+    # Create PDF from the screenshot paths
+    pdf_path = create_pdf(screenshot_paths, pdf_filename)
     
-    return screenshot_paths, zip_path, f"✅ Capture Complete. {len(screenshot_paths)} page(s) captured and zipped."
+    return screenshot_paths, pdf_path, f"✅ Capture Complete. {len(screenshot_paths)} page(s) captured and converted to PDF."
 
 def run_schema_update(urls_input, api_key, progress=gr.Progress()):
     if not urls_input:
