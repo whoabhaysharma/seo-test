@@ -91,6 +91,10 @@ def run_audit_ui(urls_input, max_pages, progress=gr.Progress()):
 def run_capture_ui(urls_input, progress=gr.Progress(track_tqdm=True)):
     if not urls_input:
         return None, None, "Please enter URL(s)."
+
+    # Check if dependencies are available
+    if 'capture_screenshots' not in globals() or 'create_pdf' not in globals():
+        return None, None, "❌ Error: Required dependencies (Playwright/Pillow) are missing. Please install them."
     
     urls_list = [u.strip() for u in urls_input.split(',') if u.strip()]
     for i, url in enumerate(urls_list):
@@ -99,19 +103,28 @@ def run_capture_ui(urls_input, progress=gr.Progress(track_tqdm=True)):
         
     progress(0.1, desc=f"📸 Initializing capture for {len(urls_list)} page(s)...")
 
-    # Run async capture in event loop - returns (folder_path, screenshot_paths)
-    folder_path, screenshot_paths = asyncio.run(capture_screenshots(urls_list, progress=progress))
-    
-    if not screenshot_paths:
-        return None, None, "❌ Failed to capture screenshots."
+    try:
+        # Run async capture in event loop - returns (folder_path, screenshot_paths)
+        folder_path, screenshot_paths = asyncio.run(capture_screenshots(urls_list, progress=progress))
         
-    progress(0.9, desc="📄 Creating PDF...")
-    pdf_filename = f"screenshots_{int(time.time())}.pdf"
+        if not screenshot_paths:
+            return None, None, "❌ Failed to capture screenshots. Check if URLs are valid."
 
-    # Create PDF from the screenshot paths
-    pdf_path = create_pdf(screenshot_paths, pdf_filename)
+        progress(0.9, desc="📄 Creating PDF...")
+        pdf_filename = f"screenshots_{int(time.time())}.pdf"
+
+        # Create PDF from the screenshot paths
+        pdf_path = create_pdf(screenshot_paths, pdf_filename)
+
+        if not pdf_path:
+            return screenshot_paths, None, "⚠️ Captured screenshots but PDF creation failed."
+
+        return screenshot_paths, pdf_path, f"✅ Capture Complete. {len(screenshot_paths)} page(s) captured and converted to PDF."
     
-    return screenshot_paths, pdf_path, f"✅ Capture Complete. {len(screenshot_paths)} page(s) captured and converted to PDF."
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return None, None, f"❌ Error during capture: {str(e)}"
 
 def run_schema_update(urls_input, api_key, progress=gr.Progress()):
     if not urls_input:
