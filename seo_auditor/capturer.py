@@ -63,19 +63,38 @@ async def capture_screenshots(urls: list[str], progress=None, output_folder: str
         except PlaywrightError as e:
             error_str = str(e)
             installed = False
+
+            # Check for various error conditions including missing libraries
+            # "error while loading shared libraries" or exit code 127
             if "Executable doesn't exist" in error_str:
                 if _install_browsers():
                     installed = True
-            elif "Host system is missing dependencies" in error_str:
+            elif "Host system is missing dependencies" in error_str or \
+                 "error while loading shared libraries" in error_str or \
+                 "exitCode=127" in error_str:
+                # Attempt to install both browsers and deps if libs are missing
+                print(f"Detected missing libraries or dependencies. Attempting to install...")
                 if _install_deps():
                     installed = True
 
             if installed:
                 try:
+                    # Retry launch
                     browser = await p.chromium.launch(args=launch_args)
                 except PlaywrightError as e2:
-                    print(f"Failed to launch browser after installation attempts: {e2}")
-                    return (output_folder, [])
+                    # If it still fails, check again for missing deps
+                    error_str_2 = str(e2)
+                    if ("error while loading shared libraries" in error_str_2 or "exitCode=127" in error_str_2):
+                         print("Launch failed again due to missing libs. Retrying dependency install...")
+                         if _install_deps():
+                             try:
+                                browser = await p.chromium.launch(args=launch_args)
+                             except Exception as e3:
+                                print(f"Failed final launch attempt: {e3}")
+                                return (output_folder, [])
+                    else:
+                        print(f"Failed to launch browser after installation attempts: {e2}")
+                        return (output_folder, [])
             else:
                 print(f"Browser launch failed: {e}")
                 return (output_folder, [])
