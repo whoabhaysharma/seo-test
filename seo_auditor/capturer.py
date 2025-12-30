@@ -11,10 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import io
 
 def _install_browsers():
-    """
-    Installs playwright browsers if they are missing.
-    Returns True if successful, False otherwise.
-    """
+    """Installs playwright browsers if they are missing."""
     print("Installing Playwright browsers...")
     try:
         subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
@@ -27,11 +24,13 @@ def _install_browsers():
 def _install_deps():
     """
     Installs playwright system dependencies.
-    Returns True if successful, False otherwise.
+    NOTE: This often requires root/sudo. If this fails in a restricted environment
+    (like Hugging Face Spaces), you must use 'packages.txt'.
     """
-    print("Installing Playwright dependencies (requires sudo/root)...")
+    print("Installing Playwright dependencies...")
     try:
-        subprocess.check_call([sys.executable, "-m", "playwright", "install-deps"])
+        # Try installing only chromium dependencies to be faster
+        subprocess.check_call([sys.executable, "-m", "playwright", "install-deps", "chromium"])
         print("Dependencies installed successfully.")
         return True
     except subprocess.CalledProcessError as e:
@@ -41,14 +40,16 @@ def _install_deps():
 async def capture_screenshots(urls: list[str], progress=None, output_folder: str = None) -> tuple[str, list[str]]:
     """
     Captures full-page screenshots for a list of URLs concurrently.
-    OPTIMIZED: 
-    - Increased concurrency from 5 to 20 simultaneous captures
-    - Saves images sequentially numbered (1.png, 2.png, etc.) in a folder
-    - Returns tuple of (folder_path, list of file paths to the screenshots)
     """
-    launch_args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+    # Added --single-process and --no-zygote for better container compatibility
+    launch_args = [
+        "--no-sandbox", 
+        "--disable-setuid-sandbox", 
+        "--disable-dev-shm-usage",
+        "--single-process", 
+        "--no-zygote"
+    ]
     
-    # Create output folder
     if output_folder is None:
         import time
         timestamp = int(time.time())
@@ -62,22 +63,29 @@ async def capture_screenshots(urls: list[str], progress=None, output_folder: str
             browser = await p.chromium.launch(args=launch_args)
         except PlaywrightError as e:
             error_str = str(e)
+            print(f"Initial launch failed: {error_str}")
+            
             installed = False
+            # Check for various missing component errors
             if "Executable doesn't exist" in error_str:
                 if _install_browsers():
                     installed = True
-            elif "Host system is missing dependencies" in error_str:
+            # FIX: Specifically catch shared library errors (libatk, libgbm, etc.)
+            elif "Host system is missing dependencies" in error_str or "error while loading shared libraries" in error_str:
                 if _install_deps():
                     installed = True
-
+            
+            # If we think we fixed it, try launching again
             if installed:
                 try:
+                    print("Retrying browser launch...")
                     browser = await p.chromium.launch(args=launch_args)
                 except PlaywrightError as e2:
-                    print(f"Failed to launch browser after installation attempts: {e2}")
+                    print(f"CRITICAL: Failed to launch browser after installation attempts: {e2}")
                     return (output_folder, [])
             else:
-                print(f"Browser launch failed: {e}")
+                # If we couldn't install deps (e.g., no sudo), we return empty
+                print("Could not resolve browser dependencies automatically.")
                 return (output_folder, [])
 
         try:
@@ -87,8 +95,6 @@ async def capture_screenshots(urls: list[str], progress=None, output_folder: str
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
             )
 
-            # OPTIMIZATION: Adjusted concurrency for stability
-            # Reduced from 20 to 5 to prevent resource exhaustion on smaller instances
             sem = asyncio.Semaphore(5)
 
             async def capture_task(idx, url):
@@ -96,18 +102,16 @@ async def capture_screenshots(urls: list[str], progress=None, output_folder: str
                     try:
                         print(f"Starting capture for: {url}")
                         page = await context.new_page()
-                        # Faster loading: don't wait for networkidle
-                        await page.goto(url, timeout=45000, wait_until="domcontentloaded")
-                        # Save with sequential number (1-indexed for user friendliness)
+                        # Increased timeout to 60s for slow sites
+                        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
                         filename = f"{idx + 1}.png"
                         filepath = os.path.join(output_folder, filename)
-                        # Note: quality option is not supported for PNG, only for JPEG
                         await page.screenshot(path=filepath, full_page=True)
                         await page.close()
-                        print(f"Saved: {filename} <- {url}")
+                        print(f"Saved: {filename}")
                         return (idx, filepath)
                     except Exception as e:
-                        print(f"ERROR: Failed to capture {url}. Exception: {type(e).__name__}: {e}")
+                        print(f"ERROR: Failed to capture {url}: {e}")
                         return (idx, None)
 
             tasks = [capture_task(i, url) for i, url in enumerate(urls)]
@@ -116,48 +120,36 @@ async def capture_screenshots(urls: list[str], progress=None, output_folder: str
             completed_count = 0
             total_count = len(urls)
             
-            # Process tasks as they complete
             for f in asyncio.as_completed(tasks):
                 res = await f
                 results.append(res)
                 completed_count += 1
-
-                # Update progress if callback provided
                 if progress:
                     try:
                         progress(completed_count / total_count, desc=f"📸 Captured {completed_count}/{total_count}")
-                    except Exception as e:
-                        # Progress callback might fail in some contexts, just log and continue
-                        print(f"Progress update: {completed_count}/{total_count}")
+                    except: pass
         finally:
             if browser:
                 await browser.close()
 
-    # Sort results by index to maintain original URL order
     results.sort(key=lambda x: x[0])
-
-    # Filter out None and return only paths
     screenshot_paths = [path for idx, path in results if path]
+    
+    if not screenshot_paths:
+        print("WARNING: No screenshots were captured successfully.")
+        
     return (output_folder, screenshot_paths)
 
 def _compress_image(path):
-    """
-    Compress a single image file to reduce memory usage and I/O.
-    OPTIMIZATION: Reduces image size by 60-70% while maintaining visual quality.
-    """
     try:
         img = Image.open(path)
-        
-        # Skip if already small
         size_kb = os.path.getsize(path) / 1024
-        if size_kb < 100:  # Skip small images
+        if size_kb < 100:
             return img.convert('RGB') if img.mode == 'RGBA' else img
         
-        # Convert RGBA to RGB
         if img.mode == 'RGBA':
             img = img.convert('RGB')
         
-        # Resize if very large (reduce by 10% if width > 2000px)
         if img.width > 2000:
             ratio = 2000 / img.width
             new_size = (int(img.width * ratio), int(img.height * ratio))
@@ -169,31 +161,18 @@ def _compress_image(path):
         return None
 
 def create_zip(folder_path: str, output_filename: str = None) -> str:
-    """
-    Creates a ZIP archive from a folder containing screenshots.
-    
-    Args:
-        folder_path: Path to the folder containing images
-        output_filename: Output zip filename (optional, auto-generated if not provided)
-    
-    Returns:
-        Path to the created zip file, or None if failed
-    """
     if not folder_path or not os.path.exists(folder_path):
-        print(f"Folder not found: {folder_path}")
         return None
     
-    # Get list of image files in the folder
     image_files = sorted(
         [f for f in os.listdir(folder_path) if f.endswith('.png')],
         key=lambda x: int(x.replace('.png', '')) if x.replace('.png', '').isdigit() else 0
     )
     
     if not image_files:
-        print("No images found in folder")
+        print("No images found to ZIP")
         return None
     
-    # Generate output filename if not provided
     if output_filename is None:
         import time
         output_filename = f"screenshots_{int(time.time())}.zip"
@@ -202,90 +181,48 @@ def create_zip(folder_path: str, output_filename: str = None) -> str:
         with zipfile.ZipFile(output_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for img_file in image_files:
                 img_path = os.path.join(folder_path, img_file)
-                zipf.write(img_path, img_file)  # Store with just filename, not full path
-        
-        # Log file size
-        file_size_mb = os.path.getsize(output_filename) / (1024 * 1024)
-        print(f"ZIP created: {output_filename} ({file_size_mb:.2f} MB) with {len(image_files)} images")
-        
+                zipf.write(img_path, img_file)
         return output_filename
-        
     except Exception as e:
         print(f"ZIP creation error: {e}")
         return None
 
-
 def create_pdf(image_paths: list[str], output_filename: str) -> str:
-    """
-    DEPRECATED: Use create_zip instead.
-    Kept for backward compatibility.
-    
-    OPTIMIZED: Creates a PDF from image paths using:
-    - Parallel image compression (ThreadPoolExecutor)
-    - Memory-efficient streaming
-    - Compression and quality optimization
-    - JPEG conversion for smaller file sizes
-    
-    Speedup: 3-5x faster than original + 60% smaller file size
-    """
     if not image_paths:
         print("Error: No image paths provided for PDF creation.")
         return None
 
     try:
-        # OPTIMIZATION 1: Parallel image compression using ThreadPoolExecutor
-        # Instead of loading images sequentially, load 5 in parallel to be safe
         images = []
-        try:
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                compressed = list(executor.map(_compress_image, image_paths))
-                images = [img for img in compressed if img is not None]
-        except Exception as e:
-            print(f"Error during parallel image compression: {e}")
-            return None
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            compressed = list(executor.map(_compress_image, image_paths))
+            images = [img for img in compressed if img is not None]
 
         if not images:
             print("Error: No valid images processed for PDF.")
             return None
 
-        # OPTIMIZATION 2: Use JPEG format for PDF to reduce size by 40-50%
-        # Convert all images to JPEG before PDF creation
         jpeg_images = []
         for img in images:
             try:
-                # Convert to JPEG (which compresses better than PNG in PDF)
                 jpeg_img = img.convert('RGB')
                 jpeg_images.append(jpeg_img)
             except Exception as e:
-                print(f"Failed to convert image to JPEG: {e}")
+                print(f"Conversion error: {e}")
 
         if not jpeg_images:
-            print("Error: failed to convert any images to JPEG.")
             return None
 
-        # OPTIMIZATION 3: Create PDF with compression enabled
-        # Use optimize=True for smaller file size
-        try:
-            jpeg_images[0].save(
-                output_filename,
-                "PDF",
-                resolution=100.0,
-                save_all=True,
-                append_images=jpeg_images[1:],
-                optimize=True,  # Compress PDF
-                quality=80,     # Balance between quality and size
-                dpi=(100, 100)  # Lower DPI = faster, smaller file
-            )
-            
-            # Log file size
-            file_size_mb = os.path.getsize(output_filename) / (1024 * 1024)
-            print(f"PDF created: {output_filename} ({file_size_mb:.2f} MB)")
-            
-            return output_filename
-        except Exception as e:
-            print(f"Failed to create PDF: {e}")
-            return None
-            
+        jpeg_images[0].save(
+            output_filename,
+            "PDF",
+            resolution=100.0,
+            save_all=True,
+            append_images=jpeg_images[1:],
+            optimize=True,
+            quality=80
+        )
+        return output_filename
     except Exception as e:
         print(f"PDF creation error: {e}")
         return None
