@@ -80,52 +80,58 @@ async def capture_screenshots(urls: list[str], progress=None, output_folder: str
                 print(f"Browser launch failed: {e}")
                 return (output_folder, [])
 
-        context = await browser.new_context(viewport={"width": 1280, "height": 1024})
-        
-        # OPTIMIZATION: Adjusted concurrency for stability
-        # Reduced from 20 to 5 to prevent resource exhaustion on smaller instances
-        sem = asyncio.Semaphore(5)
+        try:
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 1024},
+                ignore_https_errors=True,
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            )
 
-        async def capture_task(idx, url):
-            async with sem:
-                try:
-                    print(f"Starting capture for: {url}")
-                    page = await context.new_page()
-                    # Faster loading: don't wait for networkidle
-                    await page.goto(url, timeout=45000, wait_until="domcontentloaded")
-                    # Save with sequential number (1-indexed for user friendliness)
-                    filename = f"{idx + 1}.png"
-                    filepath = os.path.join(output_folder, filename)
-                    # Note: quality option is not supported for PNG, only for JPEG
-                    await page.screenshot(path=filepath, full_page=True)
-                    await page.close()
-                    print(f"Saved: {filename} <- {url}")
-                    return (idx, filepath)
-                except Exception as e:
-                    print(f"ERROR: Failed to capture {url}. Exception: {type(e).__name__}: {e}")
-                    return (idx, None)
+            # OPTIMIZATION: Adjusted concurrency for stability
+            # Reduced from 20 to 5 to prevent resource exhaustion on smaller instances
+            sem = asyncio.Semaphore(5)
 
-        tasks = [capture_task(i, url) for i, url in enumerate(urls)]
+            async def capture_task(idx, url):
+                async with sem:
+                    try:
+                        print(f"Starting capture for: {url}")
+                        page = await context.new_page()
+                        # Faster loading: don't wait for networkidle
+                        await page.goto(url, timeout=45000, wait_until="domcontentloaded")
+                        # Save with sequential number (1-indexed for user friendliness)
+                        filename = f"{idx + 1}.png"
+                        filepath = os.path.join(output_folder, filename)
+                        # Note: quality option is not supported for PNG, only for JPEG
+                        await page.screenshot(path=filepath, full_page=True)
+                        await page.close()
+                        print(f"Saved: {filename} <- {url}")
+                        return (idx, filepath)
+                    except Exception as e:
+                        print(f"ERROR: Failed to capture {url}. Exception: {type(e).__name__}: {e}")
+                        return (idx, None)
 
-        results = []
-        completed_count = 0
-        total_count = len(urls)
-        
-        # Process tasks as they complete
-        for f in asyncio.as_completed(tasks):
-            res = await f
-            results.append(res)
-            completed_count += 1
+            tasks = [capture_task(i, url) for i, url in enumerate(urls)]
+
+            results = []
+            completed_count = 0
+            total_count = len(urls)
             
-            # Update progress if callback provided
-            if progress:
-                try:
-                    progress(completed_count / total_count, desc=f"📸 Captured {completed_count}/{total_count}")
-                except Exception as e:
-                    # Progress callback might fail in some contexts, just log and continue
-                    print(f"Progress update: {completed_count}/{total_count}")
+            # Process tasks as they complete
+            for f in asyncio.as_completed(tasks):
+                res = await f
+                results.append(res)
+                completed_count += 1
 
-        await browser.close()
+                # Update progress if callback provided
+                if progress:
+                    try:
+                        progress(completed_count / total_count, desc=f"📸 Captured {completed_count}/{total_count}")
+                    except Exception as e:
+                        # Progress callback might fail in some contexts, just log and continue
+                        print(f"Progress update: {completed_count}/{total_count}")
+        finally:
+            if browser:
+                await browser.close()
 
     # Sort results by index to maintain original URL order
     results.sort(key=lambda x: x[0])
